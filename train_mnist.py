@@ -20,6 +20,13 @@ def main():
     x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
+    batch_size = 10
+    train_buf = 60000
+
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    train_dataset = train_dataset.shuffle(buffer_size=train_buf)
+    train_dataset = train_dataset.batch(batch_size)
+
     inputs = keras.layers.Input(shape=(28, 28, 1))
     x = keras.layers.Conv2D(filters=16, kernel_size=3, strides=2, padding='same', activation='linear')(inputs)
     x = keras.layers.Activation(activation='relu')(x)
@@ -43,10 +50,45 @@ def main():
 
     # TODO: Quantification part
 
+    # This value is not that important, usually 64 works.
+    # This will not change the capacity in the information-bottleneck.
+    embedding_dim = 64
+
+    # The higher this value, the higher the capacity in the information bottleneck.
+    num_embeddings = 512
+    commitment_cost = 0.25
+
+    pre_vq_conv1 = keras.layers.Conv2D(filters=embedding_dim,
+                              kernel_size=(1, 1),
+                              strides=(1, 1),
+                              name="to_vq")
+
+    flat_inputs = tf.reshape(C, [-1, embedding_dim])
+
+    _w = tf.Variable(tf.random.uniform([embedding_dim, num_embeddings]), dtype=tf.float32)
+
+    distances = (tf.reduce_sum(flat_inputs**2, 1, keepdims=True) - 2 * tf.matmul(flat_inputs, _w) + tf.reduce_sum(_w ** 2, 0, keepdims=True))
+    encoding_indices = tf.argmax(- distances, 1)
+    encodings = tf.one_hot(encoding_indices, num_embeddings)
+    encoding_indices = tf.reshape(encoding_indices, tf.shape(C)[:-1])
+
+    w = tf.transpose(_w.read_value(), [1, 0])
+    quantized =  tf.nn.embedding_lookup(w, encoding_indices)
+
+    e_latent_loss = tf.reduce_mean((tf.stop_gradient(quantized) - C) ** 2)
+    q_latent_loss = tf.reduce_mean((quantized - tf.stop_gradient(C)) ** 2)
+    vq_loss = q_latent_loss + commitment_cost * e_latent_loss
+
+    quantized = C + tf.stop_gradient(quantized - C)
+    avg_probs = tf.reduce_mean(encodings, 0)
+    perplexity = tf.exp(- tf.reduce_sum(avg_probs * tf.math.log(avg_probs + 1e-10)))
+
+    x_recon = decoder(quantized)
+    recon_error = tf.reduce_mean((x_recon - x) ** 2)
+    loss = recon_error + vq_loss
 
 
-    with tf.variable_scope('embed') :
-        embeds = tf.get_variable('embed', [K,D])
+
 
     self.recon = tf.reduce_mean((self.p_x_z - x) ** 2, axis=[0, 1, 2, 3])
     self.vq = tf.reduce_mean(
@@ -57,55 +99,6 @@ def main():
         axis=[0, 1, 2])
     self.loss = self.recon + self.vq + beta * self.commit
 
-    # NLL
-    # TODO: is it correct impl?
-    # it seems tf.reduce_prod(tf.shape(self.z_q)[1:2]) should be multipled
-    # in front of log(1/K) if we assume uniform prior on z.
-    self.nll = -1. * (tf.reduce_mean(tf.log(self.p_x_z), axis=[1, 2, 3]) + tf.log(1 / tf.cast(K, tf.float32))) / tf.log(
-        2.)
-
-      # SONNET
-
-      self._w = tf.get_variable('embedding', [embedding_dim, num_embeddings],
-initializer=initializer, trainable=True)
-
-
-    flat_inputs = tf.reshape(inputs, [-1, self._embedding_dim])
-
-
-    distances = (tf.reduce_sum(flat_inputs**2, 1, keepdims=True) - 2 * tf.matmul(flat_inputs, self._w) + tf.reduce_sum(self._w ** 2, 0, keepdims=True))
-
-
-    encoding_indices = tf.argmax(- distances, 1)
-    encodings = tf.one_hot(encoding_indices, self._num_embeddings)
-    encoding_indices = tf.reshape(encoding_indices, tf.shape(inputs)[:-1])
-    quantized = self.quantize(encoding_indices)
-
-
-
-    e_latent_loss = tf.reduce_mean((tf.stop_gradient(quantized) - inputs) ** 2)
-    q_latent_loss = tf.reduce_mean((quantized - tf.stop_gradient(inputs)) ** 2)
-    loss = q_latent_loss + self._commitment_cost * e_latent_loss
-
-    quantized = inputs + tf.stop_gradient(quantized - inputs)
-    avg_probs = tf.reduce_mean(encodings, 0)
-    perplexity = tf.exp(- tf.reduce_sum(avg_probs * tf.log(avg_probs + 1e-10)))
-
-
-  def quantize(self, encoding_indices):
-    with tf.control_dependencies([encoding_indices]):
-      w = tf.transpose(self.embeddings.read_value(), [1, 0])
-return tf.nn.embedding_lookup(w, encoding_indices, validate_indices=False)
-
-
-
-def vq_loss(inputs, embedded, commitment=0.25):
-    """
-    Compute the codebook and commitment losses for an
-    input-output pair from a VQ layer.
-    """
-    return (torch.mean(torch.pow(inputs.detach() - embedded, 2)) +
-            commitment * torch.mean(torch.pow(inputs - embedded.detach(), 2)))
 
 
 
