@@ -6,6 +6,8 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow_probability as tfp
 
+from tensorflow.python.training import moving_averages
+
 # import tensorflow_datasets as tfds
 
 def main():
@@ -79,50 +81,66 @@ def main():
 
         return nearest_codebook_entries, one_hot_assignments
 
-    def update_ema():
-        # tf.train.ExponentialMovingAverage # https://www.tensorflow.org/api_docs/python/tf/train/ExponentialMovingAverage
+    def update_ema(codes):
+        updated_ema_count = moving_averages.assign_moving_average(ema_count, tf.reduce_sum(one_hot_assignments, axis=(0, 1)), decay, zero_debias=False)
+        updated_ema_means = moving_averages.assign_moving_average(ema_means,
+                                                                  tf.reduce_sum(tf.expand_dims(codes, 2)*tf.expand_dims(one_hot_assignments, axis=(0,1)), decay, zero_debias=False))
 
-        updated_ema_count = moving_averages.assign_moving_average(ema_count,
-                                                                  tf.reduce_sum(one_hot_assignments, axis=(0, 1)),
-                                                                  decay,
-                                                                  zero_debias=False
-                                                                  )
+        # Add small value to avoid dividing by zero
+        updated_ema_count = updated_ema_count + 1e-5
+        updated_ema_means = updated_ema_means / tf.expand_dims(updated_ema_count, axis=-1)
+
+        tf.assign(codebook, updated_ema_means)
+
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+    @tf.function
+    def train_step(x):
+
+        with tf.GradientTape(persistent=True) as ae_tape:
+            codes = encoder(x)
+            nearest_codebook_entries, one_hot_assignments = vector_quantizer(codes)
+            codes_straight_through = codes + tf.stop_gradient(nearest_codebook_entries - codes)
+            decoder_distribution = decoder(codes_straight_through)
+
+            reconstruction_loss = -tf.reduce_mean(decoder_distribution.log_prob(x))
+
+            commitment_loss = tf.reduce_mean(tf.square(codes - tf.stop_gradient(nearest_codebook_entries)))
+
+            prior_dist = tfd.Multinomial(total_count=1, logits=tf.zeros((latent_size, num_codes)))
+            prior_loss = -tf.reduce_mean(tf.reduce_sum(prior_dist.log_prob(one_hot_assignments), 1))
+
+            loss = reconstruction_loss + beta * commitment_loss + prior_loss
+
+        ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables)
+        optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables + decoder.trainable_variables))
+
+        update_ema(vector_quantizer,
+                   one_hot_assignments,
+                   codes,
+                   decay)
+
+        total_loss = total_loss + loss
+        reconstruction_loss_total = reconstruction_loss_total + reconstruction_loss
+        commitment_loss_total = commitment_loss_total + commitment_loss
+        prior_loss_total = prior_loss_total + prior_loss
+
+    epochs = 20
+    for epoch in range(epochs):
+        total_loss =0
+        reconstruction_loss_total =0
+        commitment_loss_total =0
+        prior_loss_total =0
+
+        total_loss = 0.0
+        num_batches = 0
+        for x in train_dataset:
+            total_loss += train_step(x)
+            num_batches += 1
+        train_loss = total_loss / num_batches
 
 
-update_ema < - function(vector_quantizer,
-                            one_hot_assignments,
-                            codes,
-                            decay)
-    {
-        # shape = 64
-        updated_ema_count < - moving_averages$assign_moving_average(
-        vector_quantizer$ema_count,
-                         tf$reduce_sum(one_hot_assignments, axis=c(0L, 1L)),
-                            decay,
-                            zero_debias = FALSE
-    )
 
-    # 64 * 16
-    updated_ema_means < - moving_averages$assign_moving_average(
-        vector_quantizer$ema_means,
-                         # selects all assigned values (masking out the others) and sums them up over the batch
-                         # (will be divided by count later)
-                         tf$reduce_sum(
-        tf$expand_dims(codes, 2L) *
-           tf$expand_dims(one_hot_assignments, 3L),
-              axis = c(0L, 1L)
-    ),
-    decay,
-    zero_debias = FALSE
-    )
-
-    # Add small value to avoid dividing by zero
-    updated_ema_count < - updated_ema_count + 1e-5
-    updated_ema_means < -
-    updated_ema_means / tf$expand_dims(updated_ema_count, axis=-1L)
-
-    tf$assign(vector_quantizer$codebook, updated_ema_means)
-    }
 
 
 
