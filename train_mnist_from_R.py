@@ -1,4 +1,11 @@
-""""""
+"""
+
+Refs:
+https://github.com/deepmind/sonnet/blob/master/sonnet/examples/vqvae_example.ipynb
+https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/nets/vqvae.py
+https://github.com/rstudio/keras/blob/master/vignettes/examples/vq_vae.R
+https://blogs.rstudio.com/tensorflow/posts/2019-01-24-vq-vae/
+"""
 import time
 import random as rn
 
@@ -22,7 +29,7 @@ x_test = x_test.astype('float32') / 255.
 x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
 x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
-batch_size = 64
+batch_size = 256
 train_buf = 60000
 
 train_dataset = tf.data.Dataset.from_tensor_slices((x_train))
@@ -31,7 +38,7 @@ train_dataset = train_dataset.batch(batch_size)
 
 learning_rate = 0.001
 latent_size = 1
-num_codes = 64  # K num_embeddings
+num_codes = 123  # K num_embeddings
 code_size = 16  # D embedding_dim
 base_depth = 32
 beta = 0.25
@@ -138,10 +145,10 @@ def train_step(x):
     ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables)
     optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables + decoder.trainable_variables))
 
-    update_ema(one_hot_assignments, codes, decay)
-    return loss
 
-epochs = 20
+    return loss, one_hot_assignments, codes
+
+epochs = 100
 for epoch in range(epochs):
     start = time.time()
 
@@ -153,7 +160,10 @@ for epoch in range(epochs):
     total_loss = 0.0
     num_batches = 0
     for x in train_dataset:
-        total_loss += train_step(x)
+        loss, one_hot_assignments, codes = train_step(x)
+        update_ema(one_hot_assignments, codes, decay)
+        total_loss += loss
+
         num_batches += 1
     train_loss = total_loss / num_batches
 
