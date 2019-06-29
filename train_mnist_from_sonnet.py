@@ -28,7 +28,6 @@ rn.seed(random_seed)
 
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
-x_train = x_train[:3200]
 
 x_train = (x_train.astype('float32') / 255.) - 0.5
 x_test = (x_test.astype('float32') / 255.) - 0.5
@@ -42,6 +41,9 @@ train_buf = 100
 train_dataset = tf.data.Dataset.from_tensor_slices((x_train))
 train_dataset = train_dataset.shuffle(buffer_size=train_buf)
 train_dataset = train_dataset.batch(batch_size)
+
+test_dataset = tf.data.Dataset.from_tensor_slices((x_test))
+test_dataset = test_dataset.batch(batch_size)
 
 # ---------------------------------------------------------------------------------------------------------------
 input_shape = (32, 32, 3)
@@ -174,17 +176,6 @@ class VectorQuantizerEMA():
         encoding_indices = tf.reshape(encoding_indices, tf.shape(inputs)[:-1])
         quantized = self.quantize(encoding_indices)
         e_latent_loss = tf.reduce_mean((tf.stop_gradient(quantized) - inputs) ** 2)
-        #
-        # if training:
-        #     updated_ema_cluster_size = moving_averages.assign_moving_average(self._ema_cluster_size, tf.reduce_sum(encodings, 0), self._decay)
-        #     dw = tf.matmul(flat_inputs, encodings, transpose_a=True)
-        #     updated_ema_w = moving_averages.assign_moving_average(self._ema_w, dw,         self._decay)
-        #     n = tf.reduce_sum(updated_ema_cluster_size)
-        #     updated_ema_cluster_size = ((updated_ema_cluster_size + self._epsilon) / (n + self._num_embeddings * self._epsilon) * n)
-        #
-        #     normalised_updated_ema_w = (updated_ema_w / tf.reshape(updated_ema_cluster_size, [1, -1]))
-        #
-        #     self._w.assign(normalised_updated_ema_w)
 
         loss = self._commitment_cost * e_latent_loss
         quantized = inputs + tf.stop_gradient(quantized - inputs)
@@ -249,18 +240,18 @@ def train_step(x):
     return recon_error, perplexity, z, vq_output_train['encodings']
 
 
+train_res_recon_error = []
+train_res_perplexity = []
 epochs = 100
+iteraction = 0
+
 for epoch in range(epochs):
     start = time.time()
-
-    total_loss = 0
-    reconstruction_loss_total = 0
-    commitment_loss_total = 0
-    prior_loss_total = 0
 
     total_loss = 0.0
     total_per = 0.0
     num_batches = 0
+
     for x in train_dataset:
         recon_error, perplexity, z, encodings = train_step(x)
         vq_vae.update_table(z, encodings)
@@ -268,14 +259,84 @@ for epoch in range(epochs):
         total_per += perplexity
 
         num_batches += 1
+        iteraction += 1
+
+        train_res_recon_error.append(recon_error)
+        train_res_perplexity.append(perplexity)
+
+        if (iteraction + 1) % 100 == 0:
+            print('%d iterations' % (iteraction + 1))
+            print('recon_error: %.3f' % np.mean(train_res_recon_error[-100:]))
+            print('perplexity: %.3f' % np.mean(train_res_perplexity[-100:]))
+            print()
+
+
     train_loss = total_loss / num_batches
     total_per = total_per / num_batches
 
-    print(vq_vae.embeddings)
+    train_res_recon_error.append(train_loss)
+    train_res_perplexity.append(total_per)
+
+    # print(vq_vae.embeddings)
 
     epoch_time = time.time() - start
+    #
+    # template = ("{:4d}: TIME: {:.2f} ETA: {:.2f} AE_LOSS: {:.4f} PER: {:.4f} ")
+    # print(template.format(epoch + 1,
+    #                       epoch_time, epoch_time * (epochs - epoch),
+    #                       train_loss, total_per))
 
-    template = ("{:4d}: TIME: {:.2f} ETA: {:.2f} AE_LOSS: {:.4f} PER: {:.4f} ")
-    print(template.format(epoch + 1,
-                          epoch_time, epoch_time * (epochs - epoch),
-                          train_loss, total_per))
+
+import matplotlib.pyplot as plt
+f = plt.figure(figsize=(16,8))
+ax = f.add_subplot(1,2,1)
+ax.plot(train_res_recon_error)
+ax.set_yscale('log')
+ax.set_title('NMSE.')
+
+ax = f.add_subplot(1,2,2)
+ax.plot(train_res_perplexity)
+ax.set_title('Average codebook usage (perplexity).')
+
+
+def convert_batch_to_image_grid(image_batch):
+    reshaped = tf.reshape(image_batch, (4, 8, 32, 32, 3))
+    reshaped = tf.transpose(reshaped, perm=(0, 2, 1, 3, 4))
+    reshaped = tf.reshape(reshaped, (4 * 32, 8 * 32, 3))
+    return reshaped + 0.5
+
+original_train = next(iter(train_dataset))
+z = pre_vq_conv1(encoder(original_train))
+vq_output_train = vq_vae._build(z, training=True)
+x_recon_train = decoder(vq_output_train["quantize"])
+
+
+f = plt.figure(figsize=(16,8))
+ax = f.add_subplot(2,2,1)
+ax.imshow(convert_batch_to_image_grid(original_train),
+          interpolation='nearest')
+ax.set_title('training data originals')
+plt.axis('off')
+
+ax = f.add_subplot(2,2,2)
+ax.imshow(convert_batch_to_image_grid(x_recon_train),
+          interpolation='nearest')
+ax.set_title('training data reconstructions')
+plt.axis('off')
+
+original_test = next(iter(test_dataset))
+z = pre_vq_conv1(encoder(original_test))
+vq_output_train = vq_vae._build(z, training=True)
+x_recon_test = decoder(vq_output_train["quantize"])
+
+ax = f.add_subplot(2,2,3)
+ax.imshow(convert_batch_to_image_grid(original_test),
+          interpolation='nearest')
+ax.set_title('validation data originals')
+plt.axis('off')
+
+ax = f.add_subplot(2,2,4)
+ax.imshow(convert_batch_to_image_grid(x_recon_test),
+          interpolation='nearest')
+ax.set_title('validation data reconstructions')
+plt.axis('off')
