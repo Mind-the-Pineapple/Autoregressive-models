@@ -150,34 +150,30 @@ pre_vq_conv1 = keras.layers.Conv2D(filters=embedding_dim,
                         padding='same',
                         activation='linear')
 
-class VectorQuantizerEMA():
-    def __init__(self, embedding_dim, num_embeddings, commitment_cost, decay,              epsilon=1e-5, name='VectorQuantizerEMA'):
+class VectorQuantizer():
+    def __init__(self, embedding_dim, num_embeddings, commitment_cost, name='VectorQuantizer'):
         self._embedding_dim = embedding_dim
         self._num_embeddings = num_embeddings
-        self._decay = decay
         self._commitment_cost = commitment_cost
-        self._epsilon = epsilon
 
         initializer = tf.random_normal_initializer()
-        self._w = tf.Variable(initializer((embedding_dim, num_embeddings)), name='embedding')
-        self._ema_cluster_size = tf.Variable(tf.constant_initializer(0.0)((num_embeddings)), name='ema_cluster_size')
-        self._ema_w = tf.Variable(self._w.read_value(),name='ema_dw')
+        self._w = tf.Variable(initializer((embedding_dim, num_embeddings)), name='embedding',trainable=True)
 
     def _build(self, inputs, training=False):
-        w = self._w.read_value()
-
         flat_inputs = tf.reshape(inputs, [-1, self._embedding_dim])
         distances = (tf.reduce_sum(flat_inputs ** 2, 1, keepdims=True)
-                     - 2 * tf.matmul(flat_inputs, w)
-                     + tf.reduce_sum(w ** 2, 0, keepdims=True))
+                     - 2 * tf.matmul(flat_inputs, self._w)
+                     + tf.reduce_sum(self._w ** 2, 0, keepdims=True))
 
         encoding_indices = tf.argmax(- distances, 1)
         encodings = tf.one_hot(encoding_indices, self._num_embeddings)
         encoding_indices = tf.reshape(encoding_indices, tf.shape(inputs)[:-1])
         quantized = self.quantize(encoding_indices)
-        e_latent_loss = tf.reduce_mean((tf.stop_gradient(quantized) - inputs) ** 2)
 
-        loss = self._commitment_cost * e_latent_loss
+        e_latent_loss = tf.reduce_mean((tf.stop_gradient(quantized) - inputs) ** 2)
+        q_latent_loss = tf.reduce_mean((quantized - tf.stop_gradient(inputs)) ** 2)
+        loss = q_latent_loss + self._commitment_cost * e_latent_loss
+
         quantized = inputs + tf.stop_gradient(quantized - inputs)
         avg_probs = tf.reduce_mean(encodings, 0)
         perplexity = tf.exp(- tf.reduce_sum(avg_probs * tf.math.log(avg_probs + 1e-10)))
@@ -186,7 +182,8 @@ class VectorQuantizerEMA():
                 'loss': loss,
                 'perplexity': perplexity,
                 'encodings': encodings,
-                'encoding_indices': encoding_indices, }
+                'encoding_indices': encoding_indices,
+                'q_latent_loss': q_latent_loss}
 
     @property
     def embeddings(self):
@@ -196,33 +193,16 @@ class VectorQuantizerEMA():
         w = tf.transpose(self.embeddings.read_value(), [1, 0])
         return tf.nn.embedding_lookup(w, encoding_indices)
 
-    def update_table(self, inputs, encodings):
-        flat_inputs = tf.reshape(inputs, [-1, self._embedding_dim])
-
-        updated_ema_cluster_size = moving_averages.assign_moving_average(self._ema_cluster_size,
-                                                                         tf.reduce_sum(encodings, 0), self._decay)
-        dw = tf.matmul(flat_inputs, encodings, transpose_a=True)
-        updated_ema_w = moving_averages.assign_moving_average(self._ema_w, dw, self._decay)
-        n = tf.reduce_sum(updated_ema_cluster_size)
-        updated_ema_cluster_size = (
-                    (updated_ema_cluster_size + self._epsilon) / (n + self._num_embeddings * self._epsilon) * n)
-
-        normalised_updated_ema_w = (updated_ema_w / tf.reshape(updated_ema_cluster_size, [1, -1]))
-
-        self._w.assign(normalised_updated_ema_w)
-
-
 # Vector quantizer -------------------------------------------------------------------
-vq_vae = VectorQuantizerEMA(
+vq_vae = VectorQuantizer(
       embedding_dim=embedding_dim,
       num_embeddings=num_embeddings,
-      commitment_cost=commitment_cost,
-      decay=decay)
+      commitment_cost=commitment_cost)
 
 optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
 
-@tf.function
+# @tf.function
 def train_step(x):
     with tf.GradientTape(persistent=True) as ae_tape:
         z = pre_vq_conv1(encoder(x))
@@ -234,10 +214,13 @@ def train_step(x):
 
         perplexity = vq_output_train["perplexity"]
 
-    ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables)
-    optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables))
+    decoder_grads = list(zip(tf.gradients(loss, decoder.trainable_variables), decoder.trainable_variables))
 
-    return recon_error, perplexity, z, vq_output_train['encodings']
+    embed_grads = ae_tape.gradient(vq_output_train["q_latent_loss"], vq_vae.embeddings)
+    ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables)
+    optimizer.apply_gradients(zip(ae_grads+embed_grads, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables + [vq_vae.embeddings]))
+
+    return recon_error, perplexity
 
 
 train_res_recon_error = []
@@ -253,8 +236,7 @@ for epoch in range(epochs):
     num_batches = 0
 
     for x in train_dataset:
-        recon_error, perplexity, z, encodings = train_step(x)
-        vq_vae.update_table(z, encodings)
+        recon_error, perplexity = train_step(x)
         total_loss += recon_error
         total_per += perplexity
 
@@ -277,7 +259,7 @@ for epoch in range(epochs):
     train_res_recon_error.append(train_loss)
     train_res_perplexity.append(total_per)
 
-    # print(vq_vae.embeddings)
+    print(vq_vae.embeddings)
 
     epoch_time = time.time() - start
     #
