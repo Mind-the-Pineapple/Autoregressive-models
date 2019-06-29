@@ -23,6 +23,9 @@ Install dependencies
 
     pip3 install -r requirements.txt
 
+Working +-
+train cifar with vqema
+train mnist with vqema
 
 
 ## Disclaimer
