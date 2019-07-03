@@ -41,6 +41,36 @@ class MaskedConv2D(tf.keras.layers.Conv2D):
         return outputs
 
 
+class ResnetIdentityBlock(tf.keras.Model):
+    def __init__(self, kernel_size, filters):
+        super(ResnetIdentityBlock, self).__init__(name='')
+        filters1, filters2, filters3 = filters
+
+        self.conv2a = tf.keras.layers.Conv2D(filters1, (1, 1))
+        self.bn2a = tf.keras.layers.BatchNormalization()
+
+        self.conv2b = tf.keras.layers.Conv2D(filters2, kernel_size, padding='same')
+        self.bn2b = tf.keras.layers.BatchNormalization()
+
+        self.conv2c = tf.keras.layers.Conv2D(filters3, (1, 1))
+        self.bn2c = tf.keras.layers.BatchNormalization()
+
+    def call(self, input_tensor, training=False):
+        x = self.conv2a(input_tensor)
+        x = self.bn2a(x, training=training)
+        x = tf.nn.relu(x)
+
+        x = self.conv2b(x)
+        x = self.bn2b(x, training=training)
+        x = tf.nn.relu(x)
+
+        x = self.conv2c(x)
+        x = self.bn2c(x, training=training)
+
+        x += input_tensor
+        return tf.nn.relu(x)
+
+
 def main():
     random_seed = 42
     tf.random.set_seed(random_seed)
@@ -63,12 +93,41 @@ def main():
     train_dataset = train_dataset.batch(batch_size)
 
     inputs = keras.layers.Input(shape=(28, 28, 1))
-    x = MaskedConv2D(mask_type='A', filters=16, kernel_size=3, strides=2, padding='same', activation='linear')(inputs)
+    x = MaskedConv2D(mask_type='A', filters=16, kernel_size=7, strides=1, padding='same', activation='linear')(inputs)
     x = keras.layers.Activation(activation='relu')(x)
-    x = MaskedConv2D(mask_type='B', filters=32, kernel_size=3, strides=2, padding='same', activation='linear')(x)
+    x = MaskedConv2D(mask_type='B', filters=32, kernel_size=3, strides=1, padding='same', activation='linear')(x)
     x = keras.layers.Activation(activation='relu')(x)
-    x = MaskedConv2D(mask_type='B', filters=64, kernel_size=3, strides=2, padding='same', activation='linear')(x)
+    x = MaskedConv2D(mask_type='B', filters=64, kernel_size=3, strides=1, padding='same', activation='linear')(x)
     x = keras.layers.Activation(activation='relu')(x)
+    x = MaskedConv2D(mask_type='B', filters=64, kernel_size=3, strides=1, padding='same', activation='linear')(x)
+    x = keras.layers.Activation(activation='relu')(x)
+    x = MaskedConv2D(mask_type='B', filters=1, kernel_size=3, strides=1, padding='same', activation='sigmoid')(x)
     encoder = tf.keras.Model(inputs=inputs, outputs=x)
 
 
+
+    @tf.function
+    def train_step(x):
+        with tf.GradientTape(persistent=True) as ae_tape:
+            z = encoder(x)
+
+            recon_error = tf.reduce_mean((x_recon - x) ** 2) / data_variance  # Normalized MSE
+            loss = recon_error + vq_output_train["loss"]
+
+            perplexity = vq_output_train["perplexity"]
+
+        ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables)
+        optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables))
+
+        return recon_error, perplexity, z, vq_output_train['encodings']
+
+epochs = 100
+iteraction = 0
+
+for epoch in range(epochs):
+    total_loss = 0.0
+    total_per = 0.0
+    num_batches = 0
+
+    for x in train_dataset:
+        print()
