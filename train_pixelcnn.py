@@ -3,8 +3,8 @@ import random as rn
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import nn
+
 
 class MaskedConv2D(tf.keras.layers.Conv2D):
     def __init__(self, mask_type, *args, **kwargs):
@@ -12,6 +12,7 @@ class MaskedConv2D(tf.keras.layers.Conv2D):
 
         assert mask_type in {'A', 'B'}
         self.mask_type = mask_type
+        self.mask = None
 
     def build(self, input_shape):
         super(MaskedConv2D, self).build(input_shape)
@@ -20,21 +21,13 @@ class MaskedConv2D(tf.keras.layers.Conv2D):
         mask = np.ones(self.kernel.shape, dtype=np.float32)
         mask[kH // 2, kW // 2 + (self.mask_type == 'B'):, :, :] = 0.
         mask[kH // 2 + 1:, :, :] = 0.
-
+        self.mask = mask
 
     def call(self, inputs):
-        outputs = self._convolution_op(inputs, self.kernel)
+        outputs = self._convolution_op(inputs, tf.math.multiply(self.kernel, self.mask))
 
         if self.use_bias:
-            if self.data_format == 'channels_first':
-                if self.rank == 1:
-                    # nn.bias_add does not accept a 1D input tensor.
-                    bias = array_ops.reshape(self.bias, (1, self.filters, 1))
-                    outputs += bias
-                else:
-                    outputs = nn.bias_add(outputs, self.bias, data_format='NCHW')
-            else:
-                outputs = nn.bias_add(outputs, self.bias, data_format='NHWC')
+            outputs = nn.bias_add(outputs, self.bias, data_format='NHWC')
 
         if self.activation is not None:
             return self.activation(outputs)
@@ -85,10 +78,16 @@ def main():
     x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
+    # Binarization
+    x_train[x_train >= .5] = 1.
+    x_train[x_train < .5] = 0.
+    x_test[x_test >= .5] = 1.
+    x_test[x_test < .5] = 0.
+
     batch_size = 10
     train_buf = 60000
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    train_dataset = tf.data.Dataset.from_tensor_slices(x_train)
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
@@ -104,30 +103,24 @@ def main():
     x = MaskedConv2D(mask_type='B', filters=1, kernel_size=3, strides=1, padding='same', activation='sigmoid')(x)
     encoder = tf.keras.Model(inputs=inputs, outputs=x)
 
+    learning_rate=3e-4
+    optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
-
-    @tf.function
+    # @tf.function
     def train_step(x):
         with tf.GradientTape(persistent=True) as ae_tape:
             z = encoder(x)
 
-            recon_error = tf.reduce_mean((x_recon - x) ** 2) / data_variance  # Normalized MSE
-            loss = recon_error + vq_output_train["loss"]
+            loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=z, labels=x, name='loss'))
+        ae_grads = ae_tape.gradient(loss, encoder.trainable_variables)
+        optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables))
 
-            perplexity = vq_output_train["perplexity"]
+        return loss
 
-        ae_grads = ae_tape.gradient(loss, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables)
-        optimizer.apply_gradients(zip(ae_grads, encoder.trainable_variables + decoder.trainable_variables+ pre_vq_conv1.trainable_variables))
 
-        return recon_error, perplexity, z, vq_output_train['encodings']
+    epochs = 100
+    for epoch in range(epochs):
 
-epochs = 100
-iteraction = 0
-
-for epoch in range(epochs):
-    total_loss = 0.0
-    total_per = 0.0
-    num_batches = 0
-
-    for x in train_dataset:
-        print()
+        for x in train_dataset:
+            loss = train_step(x)
+            print(loss)
