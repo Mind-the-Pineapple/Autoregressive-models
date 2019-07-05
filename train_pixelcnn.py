@@ -64,6 +64,11 @@ class ResnetIdentityBlock(tf.keras.Model):
         return tf.nn.relu(x)
 
 
+def binarize(x):
+    x[x >= .5] = 1.
+    x[x < .5] = 0.
+    return x
+
 def main():
     random_seed = 42
     tf.random.set_seed(random_seed)
@@ -79,10 +84,8 @@ def main():
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
     # Binarization
-    x_train[x_train >= .5] = 1.
-    x_train[x_train < .5] = 0.
-    x_test[x_test >= .5] = 1.
-    x_test[x_test < .5] = 0.
+    x_train = binarize(x_train)
+    x_test = binarize(x_test)
 
     batch_size = 10
     train_buf = 60000
@@ -106,7 +109,7 @@ def main():
     learning_rate=3e-4
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
-    # @tf.function
+    @tf.function
     def train_step(x):
         with tf.GradientTape(persistent=True) as ae_tape:
             z = encoder(x)
@@ -118,9 +121,21 @@ def main():
         return loss
 
 
-    epochs = 100
+    epochs = 50
     for epoch in range(epochs):
-
+        print(epoch)
         for x in train_dataset:
             loss = train_step(x)
-            print(loss)
+            # print(loss)
+
+    with tf.device('/GPU:1'):
+
+        samples = np.zeros((1, 28, 28, 1), dtype='float32')
+
+        for i in range(28):
+            for j in range(28):
+                print("{} {}".format(i, j))
+                A = encoder(samples)
+                next_sample = binarize(A.numpy())
+                print(next_sample[:, i, j, 0])
+                samples[:, i, j, 0] = next_sample[:, i, j, 0]
