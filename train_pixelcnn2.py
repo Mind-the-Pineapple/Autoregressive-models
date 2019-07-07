@@ -87,6 +87,13 @@ class ResidualBlock(tf.keras.Model):
         return x
 
 
+def binarize(images):
+    """
+    Stochastically binarize values in [0, 1] by treating them as p-values of
+    a Bernoulli distribution.
+    """
+    return (np.random.uniform(size=images.shape) < images).astype('float32')
+
 def binarize(x):
     x[x >= .5] = 1.
     x[x < .5] = 0.
@@ -118,6 +125,8 @@ def main():
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
+    # https://github.com/RishabGoel/PixelCNN/blob/master/pixel_cnn.py
+    # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
     n_channel = 1
     discrete_channel = 2
 
@@ -129,7 +138,7 @@ def main():
     x = MaskedConv2D(mask_type='B', filters=256, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
     x = MaskedConv2D(mask_type='B', filters=n_channel * discrete_channel, kernel_size=1, strides=1)(x)
-    x = keras.layers.Activation(activation='sigmoid')(x)
+    # x = keras.layers.Activation(activation='sigmoid')(x)
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
@@ -204,12 +213,7 @@ grads = [T.clip(g, lib.floatX(-GRAD_CLIP), lib.floatX(GRAD_CLIP)) for g in grads
 
 
 
-def binarize(images):
-    """
-    Stochastically binarize values in [0, 1] by treating them as p-values of
-    a Bernoulli distribution.
-    """
-    return (numpy.random.uniform(size=images.shape) < images).astype('float32')
+
 
 
 
@@ -231,3 +235,9 @@ self.loss = tf.reduce_mean(
 #     new_grads_and_vars = \
 #         [(tf.clip_by_value(gv[0], -conf.grad_clip, conf.grad_clip), gv[1]) for gv in grads_and_vars]
 # self.optim = optimizer.apply_gradients(new_grads_and_vars)
+
+optimizer = tf.train.RMSPropOptimizer(1e-3)
+grads_and_vars = optimizer.compute_gradients(loss)
+
+new_grads_and_vars = [(tf.clip_by_value(gv[0], -1, 1), gv[1]) for gv in grads_and_vars]
+optim = optimizer.apply_gradients(new_grads_and_vars)
