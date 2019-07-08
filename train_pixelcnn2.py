@@ -8,7 +8,7 @@ import random as rn
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-
+import matplotlib.pyplot as plt
 
 class MaskedConv2D(tf.keras.layers.Layer):
 
@@ -91,6 +91,10 @@ class ResidualBlock(tf.keras.Model):
         x += input_tensor
         return x
 
+levels = 256
+def quantisize(images, levels):
+    return (np.digitize(images, np.arange(levels) / levels) - 1).astype('i')
+
 
 def binarize(images):
     """
@@ -114,14 +118,19 @@ def main():
     x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
-    # Binarization
-    x_train = binarize(x_train)
-    x_test = binarize(x_test)
+    levels = 2
+    x_train_quantised = quantisize(x_train,levels)
+    x_test_quantised = quantisize(x_test,levels)
+
+    # discretization_step = 1. / (levels - 1)
+    # x_train_quantised = x_train_quantised * discretization_step
+    # x_test_quantised = x_test_quantised * discretization_step
+
 
     batch_size = 100
     train_buf = 60000
 
-    train_dataset = tf.data.Dataset.from_tensor_slices(x_train)
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, x_train_quantised))
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
@@ -144,8 +153,10 @@ def main():
     learning_rate = 3e-4
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
+    compute_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
     @tf.function
-    def train_step(batch_x):
+    def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
 
@@ -153,9 +164,9 @@ def main():
             logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
 
             flattened_logits = tf.reshape(logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
-            target_pixels_loss = tf.reshape(batch_x, [-1,1])  # [N,H,W,C] -> [NHWC]
+            target_pixels_loss = tf.reshape(batch_y, [-1,1])  # [N,H,W,C] -> [NHWC]
 
-            loss  = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(target_pixels_loss, flattened_logits))
+            loss  = compute_loss(target_pixels_loss, flattened_logits)
         ae_grads = ae_tape.gradient(loss, pixelcnn.trainable_variables)
         # ae_grads, _ = tf.clip_by_norm(ae_grads, 1)
         optimizer.apply_gradients(zip(ae_grads, pixelcnn.trainable_variables))
@@ -165,9 +176,9 @@ def main():
     epochs = 10
     for epoch in range(epochs):
         print(epoch)
-        for batch_x in train_dataset:
-            print()
-            loss = train_step(batch_x)
+        for batch_x, batch_y in train_dataset:
+            # print()
+            loss = train_step(batch_x, batch_y)
             print(loss)
 
 
