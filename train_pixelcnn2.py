@@ -201,6 +201,8 @@ def main():
 # ----------------------------------------------------------------------------------------------------------------
 
 
+ clipped_gradients = [(tf.clip_by_value(_[0],-1,1), _[1]) for _ in gradients]
+
 def preprocess(q_levels):
     def preprocess_fcn(images, labels):
         # Create the target pixels from the image. Quantize the scalar pixel values into q_level indices.
