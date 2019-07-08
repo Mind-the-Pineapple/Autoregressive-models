@@ -1,3 +1,8 @@
+"""
+https://github.com/igul222/pixel_rnn/blob/master/pixel_rnn.py
+https://github.com/rampage644/wavenet/blob/master/wavenet/models.py
+https://github.com/jakebelew/gated-pixel-cnn/blob/master/network.py
+"""
 import random as rn
 
 import tensorflow as tf
@@ -94,11 +99,6 @@ def binarize(images):
     """
     return (np.random.uniform(size=images.shape) < images).astype('float32')
 
-def binarize(x):
-    x[x >= .5] = 1.
-    x[x < .5] = 0.
-    return x
-
 
 def main():
     random_seed = 42
@@ -128,7 +128,7 @@ def main():
     # https://github.com/RishabGoel/PixelCNN/blob/master/pixel_cnn.py
     # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
     n_channel = 1
-    discrete_channel = 2
+    q_levels = 2
 
     inputs = keras.layers.Input(shape=(28, 28, 1))
     x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
@@ -137,8 +137,7 @@ def main():
     x = keras.layers.Activation(activation='relu')(x)
     x = MaskedConv2D(mask_type='B', filters=256, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
-    x = MaskedConv2D(mask_type='B', filters=n_channel * discrete_channel, kernel_size=1, strides=1)(x)
-    # x = keras.layers.Activation(activation='sigmoid')(x)
+    x = MaskedConv2D(mask_type='B', filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
@@ -146,12 +145,19 @@ def main():
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
     @tf.function
-    def train_step(x):
+    def train_step(batch_x):
         with tf.GradientTape() as ae_tape:
-            z = pixelcnn(x)
+            logits = pixelcnn(batch_x)
 
-            loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=z, labels=x, name='loss'))
+            logits = tf.reshape(logits, [-1, 28, 28, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+
+            flattened_logits = tf.reshape(logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
+            target_pixels_loss = tf.reshape(batch_x, [-1,1])  # [N,H,W,C] -> [NHWC]
+
+            loss  = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(target_pixels_loss, flattened_logits))
         ae_grads = ae_tape.gradient(loss, pixelcnn.trainable_variables)
+        # ae_grads, _ = tf.clip_by_norm(ae_grads, 1)
         optimizer.apply_gradients(zip(ae_grads, pixelcnn.trainable_variables))
 
         return loss
@@ -159,21 +165,38 @@ def main():
     epochs = 10
     for epoch in range(epochs):
         print(epoch)
-        for x in train_dataset:
-            loss = train_step(x)
+        for batch_x in train_dataset:
+            print()
+            loss = train_step(batch_x)
             print(loss)
 
-    with tf.device('/GPU:1'):
 
-        samples = np.zeros((1, 28, 28, 1), dtype='float32')
 
-        for i in range(28):
-            for j in range(28):
-                print("{} {}".format(i, j))
-                A = pixelcnn(samples)
-                next_sample = binarize(A.numpy())
-                print(next_sample[:, i, j, 0])
-                samples[:, i, j, 0] = next_sample[:, i, j, 0]
+
+    samples = np.zeros((1, 28, 28, 1), dtype='float32')
+    for i in range(28):
+        for j in range(28):
+            print("{} {}".format(i, j))
+            A = pixelcnn(samples)
+            next_sample = binarize(A.numpy())
+            print(next_sample[:, i, j, 0])
+            samples[:, i, j, 0] = next_sample[:, i, j, 0]
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
+
+
+def preprocess(q_levels):
+    def preprocess_fcn(images, labels):
+        # Create the target pixels from the image. Quantize the scalar pixel values into q_level indices.
+        target_pixels = np.clip(((images * q_levels).astype('int64')), 0, q_levels - 1)  # [N,H,W,C]
+        return (images, target_pixels)
+
+    return preprocess_fcn
 
 
 
@@ -201,21 +224,6 @@ else:
 
 
 
-# https://github.com/igul222/pixel_rnn/blob/master/pixel_rnn.py
-cost = T.mean(T.nnet.binary_crossentropy(output, inputs))
-
-params = lib.search(cost, lambda x: hasattr(x, 'param'))
-lib.utils.print_params_info(params)
-
-grads = T.grad(cost, wrt=params, disconnected_inputs='warn')
-grads = [T.clip(g, lib.floatX(-GRAD_CLIP), lib.floatX(GRAD_CLIP)) for g in grads]
-
-
-
-
-
-
-
 
 
 # https://github.com/Joluo/PixelRNN/blob/master/tf/pixel_rnn.py
@@ -231,13 +239,91 @@ self.loss = tf.reduce_mean(
 
 # https://github.com/singh-hrituraj/PixelCNN-Pytorch
 
-#
-#     new_grads_and_vars = \
-#         [(tf.clip_by_value(gv[0], -conf.grad_clip, conf.grad_clip), gv[1]) for gv in grads_and_vars]
-# self.optim = optimizer.apply_gradients(new_grads_and_vars)
+# https://github.com/rampage644/wavenet/blob/master/wavenet/models.py
+nll = F.softmax_cross_entropy(y, t, normalize=True)
+chainer.report({'nll': nll, 'bits/dim': nll / dims}, self)
 
-optimizer = tf.train.RMSPropOptimizer(1e-3)
-grads_and_vars = optimizer.compute_gradients(loss)
 
-new_grads_and_vars = [(tf.clip_by_value(gv[0], -1, 1), gv[1]) for gv in grads_and_vars]
-optim = optimizer.apply_gradients(new_grads_and_vars)
+
+
+https://github.com/jakebelew/gated-pixel-cnn/blob/master/network.py
+if (num_channels > 1):
+    self.logits = tf.reshape(self.logits,
+                             [-1, height, width, q_levels, num_channels])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+    self.logits = tf.transpose(self.logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+
+flattened_logits = tf.reshape(self.logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
+target_pixels_loss = tf.reshape(self.target_pixels, [-1])  # [N,H,W,C] -> [NHWC]
+
+logger.info("Building loss and optims")
+self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+    flattened_logits, target_pixels_loss))
+
+flattened_output = tf.nn.softmax(flattened_logits)  # shape [NHWC,D], values [probability distribution]
+self.output = tf.reshape(flattened_output, [-1, height, width, num_channels,
+                                            q_levels])  # shape [N,H,W,C,D], values [probability distribution]
+
+optimizer = tf.train.RMSPropOptimizer(conf.learning_rate)
+grads_and_vars = optimizer.compute_gradients(self.loss)
+
+new_grads_and_vars = \
+    [(tf.clip_by_value(gv[0], -conf.grad_clip, conf.grad_clip), gv[1]) for gv in grads_and_vars]
+self.optim = optimizer.apply_gradients(new_grads_and_vars)
+
+show_all_variables()
+
+logger.info("Building gated_pixel_cnn finished")
+
+
+def predict(self, images):
+    '''
+    images # shape [N,H,W,C]
+    returns predicted image # shape [N,H,W,C]
+    '''
+    # self.output shape [NHWC,D]
+    pixel_value_probabilities = self.sess.run(self.output, {
+        self.inputs: images})  # shape [N,H,W,C,D], values [probability distribution]
+
+    # argmax or random draw # [NHWC,1]  quantized index - convert back to pixel value
+    pixel_value_indices = np.argmax(pixel_value_probabilities,
+                                    4)  # shape [N,H,W,C], values [index of most likely pixel value]
+    pixel_values = np.multiply(pixel_value_indices, ((self.pixel_depth - 1) / (self.q_levels - 1)))  # shape [N,H,W,C]
+
+    return pixel_values
+
+
+def test(self, images, with_update=False):
+    if with_update:
+        _, cost = self.sess.run([self.optim, self.loss],
+                                {self.inputs: images[0], self.target_pixels: images[1]})
+    else:
+        cost = self.sess.run(self.loss, {self.inputs: images[0], self.target_pixels: images[1]})
+    return cost
+
+
+def generate_from_occluded(self, images, num_generated_images, occlude_start_row):
+    samples = np.copy(images[0:num_generated_images, :, :, :])
+    samples[:, occlude_start_row:, :, :] = 0.
+
+    for i in xrange(occlude_start_row, self.height):
+        for j in xrange(self.width):
+            for k in xrange(self.channel):
+                next_sample = self.predict(samples) / (self.pixel_depth - 1.)  # argmax or random draw here
+                samples[:, i, j, k] = next_sample[:, i, j, k]
+
+    return samples
+
+
+def generate(self, images):
+    samples = images[0:9, :, :, :]
+    occlude_start_row = 18
+    samples[:, occlude_start_row:, :, :] = 0.
+
+    for i in xrange(occlude_start_row, self.height):
+        for j in xrange(self.width):
+            for k in xrange(self.channel):
+                next_sample = self.predict(samples) / (self.pixel_depth - 1.)  # argmax or random draw here
+                samples[:, i, j, k] = next_sample[:, i, j, k]
+
+
+return samples
