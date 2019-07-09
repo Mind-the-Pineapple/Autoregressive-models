@@ -74,9 +74,9 @@ class ResidualBlock(tf.keras.Model):
     def __init__(self, h):
         super(ResidualBlock, self).__init__(name='')
 
-        self.conv2a = MaskedConv2D(mask_type='B', filters=h, kernel_size=1, strides=1)
+        self.conv2a = keras.layers.Conv2D(filters=h, kernel_size=1, strides=1)
         self.conv2b = MaskedConv2D(mask_type='B', filters=h, kernel_size=3, strides=1)
-        self.conv2c = MaskedConv2D(mask_type='B', filters=2*h, kernel_size=1, strides=1)
+        self.conv2c = keras.layers.Conv2D(filters=2*h, kernel_size=1, strides=1)
 
     def call(self, input_tensor):
         x = tf.nn.relu(input_tensor)
@@ -117,9 +117,9 @@ def main():
     x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
-    levels = 2
-    x_train_quantised = quantisize(x_train,levels)
-    x_test_quantised = quantisize(x_test,levels)
+    q_levels = 2
+    x_train_quantised = quantisize(x_train,q_levels)
+    x_test_quantised = quantisize(x_test,q_levels)
 
     # discretization_step = 1. / (levels - 1)
     # x_train_quantised = x_train_quantised * discretization_step
@@ -136,16 +136,15 @@ def main():
     # https://github.com/RishabGoel/PixelCNN/blob/master/pixel_cnn.py
     # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
     n_channel = 1
-    q_levels = 2
 
     inputs = keras.layers.Input(shape=(28, 28, 1))
     x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
     for i in range(15):
         x = ResidualBlock(h=64)(x)
     x = keras.layers.Activation(activation='relu')(x)
-    x = MaskedConv2D(mask_type='B', filters=256, kernel_size=1, strides=1)(x)
+    x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
-    x = MaskedConv2D(mask_type='B', filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
+    x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
@@ -154,7 +153,7 @@ def main():
 
     compute_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 
-    # @tf.function
+    @tf.function
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
@@ -173,7 +172,7 @@ def main():
 
         return loss
 
-    epochs = 10
+    epochs = 50
     for epoch in range(epochs):
         print(epoch)
         for batch_x, batch_y in train_dataset:
@@ -189,9 +188,11 @@ def main():
         for j in range(28):
             print("{} {}".format(i, j))
             A = pixelcnn(samples)
-            next_sample = binarize(A.numpy())
-            print(next_sample[:, i, j, 0])
-            samples[:, i, j, 0] = next_sample[:, i, j, 0]
+            B = tf.nn.softmax(A[:,i,j,:], axis=-1)
+            print(B[:,i,j,1].numpy())
+            next_sample = binarize(B[:,:,:,1].numpy())
+            print(next_sample[:, i, j])
+            samples[:, i, j, 0] = next_sample[:, i, j]
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -235,8 +236,8 @@ else:
 
 
 
-
-
+https://github.com/rampage644/wavenet/commit/bbe8e3a98e48e3c3687d8ec9e342ef22cf530ac2
+nll = F.sigmoid_cross_entropy(y, F.cast(x, 'i'))
 
 
 # https://github.com/Joluo/PixelRNN/blob/master/tf/pixel_rnn.py
