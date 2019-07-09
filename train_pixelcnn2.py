@@ -91,7 +91,6 @@ class ResidualBlock(tf.keras.Model):
         x += input_tensor
         return x
 
-levels = 256
 def quantisize(images, levels):
     return (np.digitize(images, np.arange(levels) / levels) - 1).astype('i')
 
@@ -155,7 +154,7 @@ def main():
 
     compute_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 
-    @tf.function
+    # @tf.function
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
@@ -167,9 +166,10 @@ def main():
             target_pixels_loss = tf.reshape(batch_y, [-1,1])  # [N,H,W,C] -> [NHWC]
 
             loss  = compute_loss(target_pixels_loss, flattened_logits)
-        ae_grads = ae_tape.gradient(loss, pixelcnn.trainable_variables)
-        # ae_grads, _ = tf.clip_by_norm(ae_grads, 1)
-        optimizer.apply_gradients(zip(ae_grads, pixelcnn.trainable_variables))
+
+        gradients = ae_tape.gradient(loss, pixelcnn.trainable_variables)
+        gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
+        optimizer.apply_gradients(zip(gradients, pixelcnn.trainable_variables))
 
         return loss
 
