@@ -92,7 +92,7 @@ class ResidualBlock(tf.keras.Model):
         return x
 
 def quantisize(images, levels):
-    return (np.digitize(images, np.arange(levels) / levels) - 1).astype('i')
+    return (np.digitize(images, np.arange(levels) / levels) - 1).astype('int32')
 
 
 def binarize(images):
@@ -111,11 +111,13 @@ def main():
 
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
+
     x_train = x_train.astype('float32') / 255.
     x_test = x_test.astype('float32') / 255.
 
     x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
+
 
     q_levels = 2
     x_train_quantised = quantisize(x_train,q_levels)
@@ -144,6 +146,7 @@ def main():
     x = keras.layers.Activation(activation='relu')(x)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
+    x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
@@ -151,9 +154,9 @@ def main():
     learning_rate = 3e-4
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
-    compute_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
-    @tf.function
+    # @tf.function
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
@@ -161,10 +164,11 @@ def main():
             logits = tf.reshape(logits, [-1, 28, 28, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
             logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
 
-            flattened_logits = tf.reshape(logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
-            target_pixels_loss = tf.reshape(batch_y, [-1,1])  # [N,H,W,C] -> [NHWC]
+            # flattened_logits = tf.reshape(logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
+            # target_pixels_loss = tf.reshape(batch_y, [-1,1])  # [N,H,W,C] -> [NHWC]
 
-            loss  = compute_loss(target_pixels_loss, flattened_logits)
+            # loss  = compute_loss(target_pixels_loss, flattened_logits)
+            loss  = compute_loss(tf.one_hot(batch_y, q_levels) , logits)
 
         gradients = ae_tape.gradient(loss, pixelcnn.trainable_variables)
         gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
@@ -172,28 +176,34 @@ def main():
 
         return loss
 
-    epochs = 50
+    epochs = 2
     for epoch in range(epochs):
         print(epoch)
         for batch_x, batch_y in train_dataset:
-            # print()
+            print()
             loss = train_step(batch_x, batch_y)
             print(loss)
 
 
 
 
-    samples = np.zeros((1, 28, 28, 1), dtype='float32')
-    for i in range(28):
-        for j in range(28):
-            print("{} {}".format(i, j))
+    samples = np.ones((1, 28, 28, 1), dtype='float32')
+    samples[0,0,0,0] = 1
+    for i in range(5,28):
+        for j in range(6,28):
             A = pixelcnn(samples)
-            B = tf.nn.softmax(A[:,i,j,:], axis=-1)
-            print(B[:,i,j,1].numpy())
-            next_sample = binarize(B[:,:,:,1].numpy())
-            print(next_sample[:, i, j])
-            samples[:, i, j, 0] = next_sample[:, i, j]
+            A = tf.reshape(A, [-1, 28, 28, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+            A = tf.transpose(A, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+            B = tf.nn.softmax(A)
+            next_sample = tf.argmax(B[:,i,j,:,:], axis=-1)
+            samples[:, i, j, 0] = next_sample
+            print("{} {}: {}".format(i, j, next_sample.numpy()[0][0] ))
 
+
+    f, axarr = plt.subplots(1, 2)
+    axarr[0].imshow(tf.one_hot(batch_y, q_levels)[0,:,:,0,1])
+    axarr[1].imshow(binarize(tf.nn.softmax(logits)[0,:,:,0,1].numpy()))
+    plt.show()
 
 # ----------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------
@@ -341,3 +351,9 @@ def generate(self, images):
 
 
 return samples
+
+
+
+        input = Variable(input.cuda(async=True))
+        target = Variable((input.data[:,0] * 255).long())
+loss = F.cross_entropy(net(input), target)
