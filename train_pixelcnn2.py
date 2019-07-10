@@ -9,6 +9,7 @@ import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 
 class MaskedConv2D(tf.keras.layers.Layer):
 
@@ -102,6 +103,9 @@ def binarize(images):
     """
     return (np.random.uniform(size=images.shape) < images).astype('float32')
 
+def sample_from(distribution):
+    batch_size, bins = distribution.shape
+    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
 
 def main():
     random_seed = 42
@@ -111,7 +115,6 @@ def main():
 
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
-
     x_train = x_train.astype('float32') / 255.
     x_test = x_test.astype('float32') / 255.
 
@@ -119,19 +122,14 @@ def main():
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
 
-    q_levels = 2
+    q_levels = 4
     x_train_quantised = quantisize(x_train,q_levels)
     x_test_quantised = quantisize(x_test,q_levels)
-
-    # discretization_step = 1. / (levels - 1)
-    # x_train_quantised = x_train_quantised * discretization_step
-    # x_test_quantised = x_test_quantised * discretization_step
-
 
     batch_size = 100
     train_buf = 60000
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, x_train_quantised))
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train_quantised.astype('float32')/(q_levels-1), x_train_quantised))
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
@@ -151,12 +149,13 @@ def main():
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
+
     learning_rate = 3e-4
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
     compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
-    # @tf.function
+    @tf.function
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
@@ -164,10 +163,6 @@ def main():
             logits = tf.reshape(logits, [-1, 28, 28, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
             logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
 
-            # flattened_logits = tf.reshape(logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
-            # target_pixels_loss = tf.reshape(batch_y, [-1,1])  # [N,H,W,C] -> [NHWC]
-
-            # loss  = compute_loss(target_pixels_loss, flattened_logits)
             loss  = compute_loss(tf.one_hot(batch_y, q_levels) , logits)
 
         gradients = ae_tape.gradient(loss, pixelcnn.trainable_variables)
@@ -176,7 +171,7 @@ def main():
 
         return loss
 
-    epochs = 2
+    epochs = 5
     for epoch in range(epochs):
         print(epoch)
         for batch_x, batch_y in train_dataset:
@@ -185,24 +180,24 @@ def main():
             print(loss)
 
 
-
-
-    samples = np.ones((1, 28, 28, 1), dtype='float32')
-    samples[0,0,0,0] = 1
-    for i in range(5,28):
-        for j in range(6,28):
+    samples = (np.random.rand(100, 28, 28, 1)* 0.01).astype('float32')
+    for i in range(28):
+        for j in range(28):
             A = pixelcnn(samples)
             A = tf.reshape(A, [-1, 28, 28, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
             A = tf.transpose(A, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
             B = tf.nn.softmax(A)
-            next_sample = tf.argmax(B[:,i,j,:,:], axis=-1)
-            samples[:, i, j, 0] = next_sample
-            print("{} {}: {}".format(i, j, next_sample.numpy()[0][0] ))
+            next_sample = B[:,i,j,0,:]
+            samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+            print("{} {}: {}".format(i, j, sample_from(next_sample.numpy())[0]))
 
-
-    f, axarr = plt.subplots(1, 2)
-    axarr[0].imshow(tf.one_hot(batch_y, q_levels)[0,:,:,0,1])
-    axarr[1].imshow(binarize(tf.nn.softmax(logits)[0,:,:,0,1].numpy()))
+    fig = plt.figure()
+    for x in range(1,10):
+        for y in range(1, 10):
+            ax = fig.add_subplot(10, 10, 10 * y + x)
+            ax.matshow(samples[10 * y + x,:,:,0], cmap=matplotlib.cm.binary)
+            plt.xticks(np.array([]))
+            plt.yticks(np.array([]))
     plt.show()
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -210,17 +205,6 @@ def main():
 # ----------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------
-
-
- clipped_gradients = [(tf.clip_by_value(_[0],-1,1), _[1]) for _ in gradients]
-
-def preprocess(q_levels):
-    def preprocess_fcn(images, labels):
-        # Create the target pixels from the image. Quantize the scalar pixel values into q_level indices.
-        target_pixels = np.clip(((images * q_levels).astype('int64')), 0, q_levels - 1)  # [N,H,W,C]
-        return (images, target_pixels)
-
-    return preprocess_fcn
 
 
 
@@ -287,17 +271,6 @@ flattened_output = tf.nn.softmax(flattened_logits)  # shape [NHWC,D], values [pr
 self.output = tf.reshape(flattened_output, [-1, height, width, num_channels,
                                             q_levels])  # shape [N,H,W,C,D], values [probability distribution]
 
-optimizer = tf.train.RMSPropOptimizer(conf.learning_rate)
-grads_and_vars = optimizer.compute_gradients(self.loss)
-
-new_grads_and_vars = \
-    [(tf.clip_by_value(gv[0], -conf.grad_clip, conf.grad_clip), gv[1]) for gv in grads_and_vars]
-self.optim = optimizer.apply_gradients(new_grads_and_vars)
-
-show_all_variables()
-
-logger.info("Building gated_pixel_cnn finished")
-
 
 def predict(self, images):
     '''
@@ -351,9 +324,3 @@ def generate(self, images):
 
 
 return samples
-
-
-
-        input = Variable(input.cuda(async=True))
-        target = Variable((input.data[:,0] * 255).long())
-loss = F.cross_entropy(net(input), target)
