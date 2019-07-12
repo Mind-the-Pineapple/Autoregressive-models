@@ -11,23 +11,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 
+# TODO: aceitar filtro nao quadrado
+# TODO: ARRUMAR VERTICAL
 class MaskedConv2D(tf.keras.layers.Layer):
-
-    # Mask
-    #         -------------------------------------
-    #        |  1       1       1       1       1 |
-    #        |  1       1       1       1       1 |
-    #        |  1       1    1 if B     0       0 |   H // 2
-    #        |  0       0       0       0       0 |   H // 2 + 1
-    #        |  0       0       0       0       0 |
-    #         -------------------------------------
-    #  index    0       1     W//2    W//2+1
     def __init__(self,
                  mask_type,
                  filters,
                  kernel_size,
                  strides=1,
                  padding='same',
+                 vertical=True,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros'):
         super(MaskedConv2D, self).__init__()
@@ -39,6 +32,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
         self.filters = filters
         self.kernel_size = kernel_size
         self.padding = padding.upper()
+        self.vertical = vertical
         self.kernel_initializer = keras.initializers.get(kernel_initializer)
         self.bias_initializer = keras.initializers.get(bias_initializer)
 
@@ -57,8 +51,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                       trainable=True)
 
         mask = np.ones(self.kernel.shape, dtype=np.float32)
-        mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
-        mask[self.kernel_size // 2 + 1:, :, :] = 0.
+        if self.vertical:
+            mask[self.kernel_size // 2:, :, :, :] = 0.
+        else:
+            mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
+            mask[self.kernel_size // 2 + 1:, :, :] = 0.
 
         self.mask = tf.constant(mask,
                                 dtype=tf.float32,
@@ -71,26 +68,40 @@ class MaskedConv2D(tf.keras.layers.Layer):
         return x
 
 
-class ResidualBlock(tf.keras.Model):
-    def __init__(self, h):
-        super(ResidualBlock, self).__init__(name='')
 
-        self.conv2a = keras.layers.Conv2D(filters=h, kernel_size=1, strides=1)
-        self.conv2b = MaskedConv2D(mask_type='B', filters=h, kernel_size=3, strides=1)
-        self.conv2c = keras.layers.Conv2D(filters=2*h, kernel_size=1, strides=1)
+class SecondaryGatedBlock(tf.keras.Model):
+    def __init__(self, h, kernel_size):
+        super(SecondaryGatedBlock, self).__init__(name='')
 
-    def call(self, input_tensor):
-        x = tf.nn.relu(input_tensor)
-        x = self.conv2a(x)
+        self.vertical_conv = MaskedConv2D('B', 2 * h, kernel_size=(kernel_size, kernel_size), vertical=True)
+        self.horizontal_conv = MaskedConv2D('B', 2 * h, kernel_size=(1, kernel_size), vertical=False)
+        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
 
-        x = tf.nn.relu(x)
-        x = self.conv2b(x)
+        self.residual_vertical = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
 
-        x = tf.nn.relu(x)
-        x = self.conv2c(x)
+        self.horizontal_output = keras.layers.Conv2D(filters=h, kernel_size=1, strides=1)
 
-        x += input_tensor
-        return x
+    # TODO:ARRUMAR SPLIT
+    def _gate(self, x):
+        return tf.nn.tanh(x[:, :self.out_channels]) * tf.nn.sigmoid(x[:, self.out_channels:])
+
+    def call(self,  v, h):
+        horizontal_preactivation = self.horizontal_conv(h)  # 1xN
+        vertical_preactivation = self.vertical_conv(v)  # NxN
+        v_to_h = self.v_to_h_conv(vertical_preactivation)  # 1x1
+        vertical_preactivation = vertical_preactivation + self.residual_vertical(v)  # 1x1 to residual
+        v_out = self._gate(vertical_preactivation)
+
+        horizontal_preactivation = horizontal_preactivation + v_to_h
+        h_activated = self._gate(horizontal_preactivation)
+
+        h_preres = self.horizontal_output(h_activated)
+
+        h_out = h + h_preres
+
+        return v_out, h_out
+
+
 
 def quantisize(images, levels):
     return (np.digitize(images, np.arange(levels) / levels) - 1).astype('int32')
@@ -199,3 +210,94 @@ def main():
             plt.xticks(np.array([]))
             plt.yticks(np.array([]))
     plt.show()
+
+# ---------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
+
+class CroppedConvolution(L.Convolution2D):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __call__(self, x):
+        ret = super().__call__(x)
+        kh, kw = self.ksize
+        pad_h, pad_w = self.pad
+        h_crop = -(kh + 1) if pad_h == kh else None
+        w_crop = -(kw + 1) if pad_w == kw else None
+
+        return ret[:, :, :h_crop, :w_crop]
+
+
+
+
+class CroppedConvolution(tf.keras.layers.Layer):
+    def __init__(self,
+                 filters,
+                 kernel_size,
+                 strides=1,
+                 kernel_initializer='glorot_uniform',
+                 bias_initializer='zeros'):
+        super(CroppedConvolution, self).__init__()
+
+        self.strides = strides
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.kernel_initializer = keras.initializers.get(kernel_initializer)
+        self.bias_initializer = keras.initializers.get(bias_initializer)
+
+    def build(self, input_shape):
+        self.kernel = self.add_variable("kernel",
+                                        shape=(self.kernel_size,
+                                               self.kernel_size,
+                                               int(input_shape[-1]),
+                                               self.filters),
+                                        initializer=self.kernel_initializer,
+                                        trainable=True)
+
+        self.bias = self.add_variable("bias",
+                                      shape=(self.filters, ),
+                                      initializer=self.bias_initializer,
+                                      trainable=True)
+
+        h_crop = -(kh + 1) if pad_h == kh else None
+        w_crop = -(kw + 1) if pad_w == kw else None
+        pad = [[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]]
+
+    def call(self, input):
+
+        x = tf.nn.conv2d(input, self.kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
+        x = tf.nn.bias_add(x, self.bias)
+        return x
+
+
+
+def down_shift(x):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0],1,xs[2],xs[3]]), x[:,:xs[1]-1,:,:]],1)
+
+def right_shift(x):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0],xs[1],1,xs[3]]), x[:,:,:xs[2]-1,:]],2)
+
+@add_arg_scope
+def down_shifted_conv2d(x, num_filters, filter_size=[2,3], stride=[1,1], **kwargs):
+    x = tf.pad(x, [[0,0],[filter_size[0]-1,0], [int((filter_size[1]-1)/2),int((filter_size[1]-1)/2)],[0,0]])
+    return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+
+@add_arg_scope
+def down_shifted_deconv2d(x, num_filters, filter_size=[2,3], stride=[1,1], **kwargs):
+    x = deconv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+    xs = int_shape(x)
+    return x[:,:(xs[1]-filter_size[0]+1),int((filter_size[1]-1)/2):(xs[2]-int((filter_size[1]-1)/2)),:]
+
+@add_arg_scope
+def down_right_shifted_conv2d(x, num_filters, filter_size=[2,2], stride=[1,1], **kwargs):
+    x = tf.pad(x, [[0,0],[filter_size[0]-1, 0], [filter_size[1]-1, 0],[0,0]])
+    return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+
+@add_arg_scope
+def down_right_shifted_deconv2d(x, num_filters, filter_size=[2,2], stride=[1,1], **kwargs):
+    x = deconv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+    xs = int_shape(x)
+return x[:,:(xs[1]-filter_size[0]+1):,:(xs[2]-filter_size[1]+1),:]
