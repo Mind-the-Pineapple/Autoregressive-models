@@ -11,35 +11,37 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 
-# TODO: aceitar filtro nao quadrado
-# TODO: ARRUMAR VERTICAL
 class MaskedConv2D(tf.keras.layers.Layer):
     def __init__(self,
-                 mask_type,
                  filters,
                  kernel_size,
+                 mask_type='B',
                  strides=1,
                  padding='same',
-                 vertical=True,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros'):
         super(MaskedConv2D, self).__init__()
 
-        assert mask_type in {'A', 'B'}
+        assert mask_type in {'A', 'B', 'V'}
         self.mask_type = mask_type
 
         self.strides = strides
         self.filters = filters
+
+        if isinstance(kernel_size, int):
+            kernel_size =  (kernel_size,) * 2
         self.kernel_size = kernel_size
+
         self.padding = padding.upper()
-        self.vertical = vertical
         self.kernel_initializer = keras.initializers.get(kernel_initializer)
         self.bias_initializer = keras.initializers.get(bias_initializer)
 
     def build(self, input_shape):
+        kernel_h, kernel_w = self.kernel_size
+
         self.kernel = self.add_variable("kernel",
-                                        shape=(self.kernel_size,
-                                               self.kernel_size,
+                                        shape=(kernel_h,
+                                               kernel_w,
                                                int(input_shape[-1]),
                                                self.filters),
                                         initializer=self.kernel_initializer,
@@ -51,11 +53,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                       trainable=True)
 
         mask = np.ones(self.kernel.shape, dtype=np.float32)
-        if self.vertical:
-            mask[self.kernel_size // 2:, :, :, :] = 0.
+        if self.mask_type == 'V':
+            mask[kernel_h // 2:, :, :, :] = 0.
         else:
-            mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
-            mask[self.kernel_size // 2 + 1:, :, :] = 0.
+            mask[kernel_h // 2, kernel_w // 2 + (self.mask_type == 'B'):, :, :] = 0.
+            mask[kernel_h // 2 + 1:, :, :] = 0.
 
         self.mask = tf.constant(mask,
                                 dtype=tf.float32,
@@ -69,27 +71,25 @@ class MaskedConv2D(tf.keras.layers.Layer):
 
 
 
-class SecondaryGatedBlock(tf.keras.Model):
-    def __init__(self, h, kernel_size):
-        super(SecondaryGatedBlock, self).__init__(name='')
+class GatedBlock(tf.keras.Model):
+    def __init__(self, n_filters, kernel_size):
+        super(GatedBlock, self).__init__(name='')
 
-        self.vertical_conv = MaskedConv2D('B', 2 * h, kernel_size=(kernel_size, kernel_size), vertical=True)
-        self.horizontal_conv = MaskedConv2D('B', 2 * h, kernel_size=(1, kernel_size), vertical=False)
-        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
+        self.vertical_conv = MaskedConv2D(2 * n_filters, kernel_size=(kernel_size, kernel_size), mask_type='V')
+        self.horizontal_conv = MaskedConv2D(2 * n_filters, kernel_size=(1, kernel_size))
+        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * n_filters, kernel_size=1)
 
-        self.residual_vertical = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
+        self.horizontal_output = keras.layers.Conv2D(filters=n_filters, kernel_size=1)
 
-        self.horizontal_output = keras.layers.Conv2D(filters=h, kernel_size=1, strides=1)
-
-    # TODO:ARRUMAR SPLIT
     def _gate(self, x):
-        return tf.nn.tanh(x[:, :self.out_channels]) * tf.nn.sigmoid(x[:, self.out_channels:])
+        tanh_preactivation, sigmoid_preactivation =  tf.split(x, 2, axis=-1)
+        return tf.nn.tanh(tanh_preactivation) * tf.nn.sigmoid(sigmoid_preactivation)
 
-    def call(self,  v, h):
+    def call(self, input_tensor):
+        v, h = tf.split(input_tensor, 2, axis=-1)
         horizontal_preactivation = self.horizontal_conv(h)  # 1xN
         vertical_preactivation = self.vertical_conv(v)  # NxN
         v_to_h = self.v_to_h_conv(vertical_preactivation)  # 1x1
-        vertical_preactivation = vertical_preactivation + self.residual_vertical(v)  # 1x1 to residual
         v_out = self._gate(vertical_preactivation)
 
         horizontal_preactivation = horizontal_preactivation + v_to_h
@@ -99,7 +99,8 @@ class SecondaryGatedBlock(tf.keras.Model):
 
         h_out = h + h_preres
 
-        return v_out, h_out
+        output = tf.concat((v_out, h_out), axis=-1)
+        return output
 
 
 
@@ -133,7 +134,7 @@ def main():
     x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
 
 
-    q_levels = 4
+    q_levels = 2
     x_train_quantised = quantisize(x_train,q_levels)
     x_test_quantised = quantisize(x_test,q_levels)
 
@@ -150,9 +151,10 @@ def main():
 
     inputs = keras.layers.Input(shape=(28, 28, 1))
     x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
-    for i in range(15):
-        x = ResidualBlock(h=64)(x)
-    x = keras.layers.Activation(activation='relu')(x)
+    for i in range(7):
+        x = GatedBlock(n_filters=64, kernel_size=3)(x)
+    v, h = tf.split(x, 2, axis=-1)
+    x = keras.layers.Activation(activation='relu')(h)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
@@ -230,8 +232,18 @@ class CroppedConvolution(L.Convolution2D):
 
 
 
+def down_shift(x):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0],1,xs[2],xs[3]]), x[:,:xs[1]-1,:,:]],1)
+
+
+
+def right_shift(x):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0],xs[1],1,xs[3]]), x[:,:,:xs[2]-1,:]],2)
 
 class CroppedConvolution(tf.keras.layers.Layer):
+
     def __init__(self,
                  filters,
                  kernel_size,
@@ -269,16 +281,6 @@ class CroppedConvolution(tf.keras.layers.Layer):
         x = tf.nn.conv2d(input, self.kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
         x = tf.nn.bias_add(x, self.bias)
         return x
-
-
-
-def down_shift(x):
-    xs = int_shape(x)
-    return tf.concat([tf.zeros([xs[0],1,xs[2],xs[3]]), x[:,:xs[1]-1,:,:]],1)
-
-def right_shift(x):
-    xs = int_shape(x)
-    return tf.concat([tf.zeros([xs[0],xs[1],1,xs[3]]), x[:,:,:xs[2]-1,:]],2)
 
 @add_arg_scope
 def down_shifted_conv2d(x, num_filters, filter_size=[2,3], stride=[1,1], **kwargs):
