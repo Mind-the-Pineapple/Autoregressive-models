@@ -78,15 +78,17 @@ def gated_block_pass(n_filters, kernel_size, input_tensor, y):
     v, h = tf.split(input_tensor, 2, axis=-1)
 
     # TODO: 1×1convolution applied to a 1-hot encoding.
-    y_one = tf.one_hot(y, depth=10)
-    label = F.broadcast_to(F.expand_dims(F.expand_dims(self.label(label), -1), -1), v_t.shape)
-
+    label = tf.broadcast_to(tf.expand_dims(tf.expand_dims(y, -1), -1), [100, 28, 28])
+    y_one = tf.one_hot(label, depth=10)
+    codified = keras.layers.Conv2D(filters=2 * n_filters, kernel_size=1)(y_one)
 
     horizontal_preactivation = MaskedConv2D(2 * n_filters, kernel_size=(1, kernel_size))(h)  # 1xN
     vertical_preactivation = MaskedConv2D(2 * n_filters, kernel_size=(kernel_size, kernel_size), mask_type='V')(v)  # NxN
     v_to_h = keras.layers.Conv2D(filters=2 * n_filters, kernel_size=1)(vertical_preactivation)  # 1x1
+    vertical_preactivation = vertical_preactivation + codified
     v_out = _gate(vertical_preactivation)
     horizontal_preactivation = horizontal_preactivation + v_to_h
+    horizontal_preactivation = horizontal_preactivation + codified
     h_activated = _gate(horizontal_preactivation)
     h_preres = keras.layers.Conv2D(filters=n_filters, kernel_size=1)(h_activated)
     h_out = h + h_preres
@@ -132,7 +134,7 @@ def main():
     batch_size = 100
     train_buf = 60000
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((x_train_quantised.astype('float32')/(q_levels-1), x_train_quantised))
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train_quantised.astype('float32')/(q_levels-1), x_train_quantised, y_train))
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
@@ -141,9 +143,10 @@ def main():
     n_channel = 1
 
     inputs = keras.layers.Input(shape=(28, 28, 1))
+    labels = keras.layers.Input(shape=(None,))
     x = MaskedConv2D(mask_type='A', filters=256, kernel_size=7, strides=1)(inputs)
     for i in range(7):
-        x = gated_block_pass(n_filters=128, kernel_size=3, input_tensor=x)
+        x = gated_block_pass(n_filters=128, kernel_size=3, input_tensor=x, y=labels)
     v, h = tf.split(x, 2, axis=-1)
     x = keras.layers.Activation(activation='relu')(h)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
@@ -151,7 +154,7 @@ def main():
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
-    pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
+    pixelcnn = tf.keras.Model(inputs=[inputs, labels], outputs=x)
 
 
     learning_rate = 3e-4
@@ -160,7 +163,7 @@ def main():
     compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
     @tf.function
-    def train_step(batch_x, batch_y):
+    def train_step(batch_x, batch_y, batch_target):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x)
 
