@@ -12,10 +12,68 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 
+
+class AttentionBlock(nn.Module):
+    def __init__(self, in_channels, key_size, value_size):
+        super(AttentionBlock, self).__init__()
+        self.linear_query = nn.Linear(in_channels, key_size)
+        self.linear_keys = nn.Linear(in_channels, key_size)
+        self.linear_values = nn.Linear(in_channels, value_size)
+        self.sqrt_key_size = math.sqrt(key_size)
+
+    def forward(self, input):
+        # input is dim (N, T, in_channels) where N is the batch_size, and T is
+        # the sequence length
+        mask = np.array([[1 if i>j else 0 for i in range(input.shape[1])] for j in range(input.shape[1])])
+        mask = torch.ByteTensor(mask).cuda()
+
+        #import pdb; pdb.set_trace()
+        keys = self.linear_keys(input) # shape: (N, T, key_size)
+        query = self.linear_query(input) # shape: (N, T, key_size)
+        values = self.linear_values(input) # shape: (N, T, value_size)
+        temp = torch.bmm(query, torch.transpose(keys, 1, 2)) # shape: (N, T, T)
+        temp.data.masked_fill_(mask, -float('inf'))
+        temp = F.softmax(temp / self.sqrt_key_size, dim=1) # shape: (N, T, T), broadcasting over any slice [:, x, :], each row of the matrix
+        temp = torch.bmm(temp, values) # shape: (N, T, value_size)
+        return torch.cat((input, temp), dim=2) # shape: (N, T, in_channels + value_size)
+
+
+class CausalAttention(tf.keras.Model):
+    def __init__(self, key_size=16, value_size=128):
+        super(CausalAttention, self).__init__()
+
+        self.linear_query = tf.keras.layers.Dense(key_size, activation='linear')
+        self.linear_keys = tf.keras.layers.Dense(key_size, activation='linear')
+        self.linear_values = tf.keras.layers.Dense(value_size, activation='linear')
+        self.sqrt_key_size = tf.sqrt(key_size)
+
+    def call(self, input_tensor):
+        # input_tensor is dim (N, T, in_channels) where N is the batch_size, and T is
+
+        batch_size, height, width, _ = input_tensor.shape
+
+
+        keys = self.linear_keys(input_tensor) # shape: (N, T, key_size)
+        query = self.linear_query(input_tensor) # shape: (N, T, key_size)
+        values = self.linear_values(input_tensor) # shape: (N, T, value_size)
+
+        attn = tf.matmul(query, keys) / self.sqrt_key_size
+        mask, start_mask = self._causal_mask(height * width)
+        # attn = attn.masked_fill(mask == 0, -1e4)
+        attn = tf.nn.softmax(attn, axis=3) * start_mask # TODO: Verificar axis
+        out = tf.matmul(attn, values) # OK
+        out = tf.transpose(out, perm=[1,2])
+        out = tf.reshape(out, [batch_size, height, width, self.dim_head * self.n_head]) # TODO: checar dim_head e n_head
+
+        return out
+
+
+
 class CausalAttention(tf.keras.layers.Layer):
     def __init__(self,
                  query_channel,
                  key_channel,
+                 value_size,
                  channel,
                  n_head=8,
                  kernel_initializer='glorot_uniform'):
@@ -45,6 +103,22 @@ class CausalAttention(tf.keras.layers.Layer):
 
         self.kernel_initializer = keras.initializers.get(kernel_initializer)
 
+    def _causal_mask(size):
+        shape = [size, size]
+        mask = np.triu(np.ones(shape), k=1).astype(np.uint8).T
+        start_mask = np.ones(size).astype(np.float32)
+        start_mask[0] = 0
+
+        return (
+            tf.expand_dims(mask, axis=0),
+            tf.expand_dims(start_mask, axis=1),
+        )
+
+    def masked_fill(matrix, mask, num=-1e4):
+        # TODO:
+        negmask = 1 - mask
+        return (matrix * mask) + (-((negmask * num + num) - num)
+
     def forward(self, query, key):
         batch, _, height, width = key.shape
 
@@ -58,24 +132,63 @@ class CausalAttention(tf.keras.layers.Layer):
         value = reshape(self.value(key_flat))
 
         attn = tf.matmul(query, key) / tf.sqrt(self.dim_head) # OK
+        mask, start_mask = self._causal_mask(height * width)
+        # attn = attn.masked_fill(mask == 0, -1e4)
+        attn = tf.nn.softmax(attn, axis=3) * start_mask # TODO: Verificar axis
         out = tf.matmul(attn, value) # OK
-
-
-
-        mask, start_mask = causal_mask(height * width)
-        mask = mask.type_as(query)
-        start_mask = start_mask.type_as(query)
-        attn = attn.masked_fill(mask == 0, -1e4)
-        attn = torch.softmax(attn, 3) * start_mask
-        attn = self.dropout(attn)
-
-        out = attn @ value
-        out = out.transpose(1, 2).reshape(
-            batch, height, width, self.dim_head * self.n_head
-        )
-        out = out.permute(0, 3, 1, 2)
+        out = tf.transpose(out, perm=[1,2])
+        out = tf.reshape(batch, height, width, self.dim_head * self.n_head) # TODO: checar dim_head e n_head
 
         return out
+
+
+
+
+
+
+def causal_attention(key, mixin, query, downsample=1, use_pos_enc=False):
+    bs, nr_chns = int_shape(key)[0], int_shape(key)[-1]
+
+
+    if downsample > 1:
+        pool_shape = [1, downsample, downsample, 1]
+        key = tf.nn.max_pool(key, pool_shape, pool_shape, 'SAME')
+        mixin = tf.nn.max_pool(mixin, pool_shape, pool_shape, 'SAME')
+
+    xs = int_shape(mixin)
+    if use_pos_enc:
+        pos1 = tf.range(0., xs[1]) / xs[1]
+        pos2 = tf.range(0., xs[2]) / xs[1]
+        mixin = tf.concat([
+            mixin,
+            tf.tile(pos1[None, :, None, None], [xs[0], 1, xs[2], 1]),
+            tf.tile(pos2[None, None, :, None], [xs[0], xs[2], 1, 1]),
+        ], axis=3)
+
+
+    mixin_chns = int_shape(mixin)[-1]
+    canvas_size = int(np.prod(int_shape(key)[1:-1]))
+    canvas_size_q = int(np.prod(int_shape(query)[1:-1]))
+    causal_mask = get_causal_mask(canvas_size_q, downsample)
+
+    dot = tf.matmul(
+        tf.reshape(query, [bs, canvas_size_q, nr_chns]),
+        tf.reshape(key, [bs, canvas_size, nr_chns]),
+        transpose_b=True
+    ) - (1. - causal_mask) * 1e10
+    dot = dot - tf.reduce_max(dot, axis=-1, keep_dims=True)
+
+    causal_exp_dot = tf.exp(dot / np.sqrt(nr_chns).astype(np.float32)) * causal_mask
+    causal_probs = causal_exp_dot / (tf.reduce_sum(causal_exp_dot, axis=-1, keep_dims=True) + 1e-6)
+
+    mixed = tf.matmul(
+        causal_probs,
+        tf.reshape(mixin, [bs, canvas_size, mixin_chns])
+    )
+
+    return tf.reshape(mixed, int_shape(query)[:-1] + [mixin_chns])
+
+
 
 
 
@@ -252,6 +365,15 @@ def main():
         optimizer.apply_gradients(zip(gradients, pixelcnn.trainable_variables))
 
         return loss
+
+    background = tf.concat(
+        [
+            ((tf.range(28, dtype=tf.float32) - 28 / 2) / 28)[None, :, None, None] + 0. * x,
+            ((tf.range(28, dtype=tf.float32) - 28 / 2) / 28)[None, None, :, None] + 0. * x,
+        ],
+        axis=3
+    )
+
 
     epochs = 5
     for epoch in range(epochs):

@@ -37,7 +37,14 @@ class ResBlock(tf.keras.Model):
 
 class Encoder(tf.keras.Model):
   def __init__(self, in_channel, channel, n_res_block, n_res_channel, stride):
-    super(ResBlock, self).__init__(name='')
+    super(Encoder, self).__init__(name='')
+
+    if stride == 4:
+        blocks = [keras.layers.Conv2D(filters=filters1,
+                                      kernel_size=(3,3),
+                                      strides=(1, 1),
+                                      padding='same',
+                                      activation='linear')]
 
     self.act_a = keras.layers.Activation(activation='relu')
 
