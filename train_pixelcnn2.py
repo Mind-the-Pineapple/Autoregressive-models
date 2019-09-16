@@ -232,3 +232,49 @@ def main():
             next_sample = B[:, i, j, 0, :]
             samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
             print("{} {}: {}".format(i, j, sample_from(next_sample.numpy())[0]))
+
+
+# -------------------------------------------------------------------------------------------------------------
+# TO CALCULATE NLL
+# FROM https://github.com/Schlumberger/pixel-constrained-cnn-pytorch/blob/master/pixconcnn/models/gated_pixelcnn.py
+
+    def log_likelihood(self, device, samples):
+        """Calculates log likelihood of samples under model.
+        Parameters
+        ----------
+        device : torch.device instance
+        samples : torch.Tensor
+            Batch of images. Shape (batch_size, num_channels, width, height).
+            Values should be integers in [0, self.prior_net.num_colors - 1].
+        """
+        # Set model to evaluation mode
+        self.eval()
+
+        num_samples, num_channels, height, width = samples.size()
+        log_probs = torch.zeros(num_samples)
+        log_probs = log_probs.to(device)
+
+        # Normalize samples before passing through model
+        norm_samples = samples.float() / (self.num_colors - 1)
+        # Calculate pixel probs according to the model
+        logits = self.forward(norm_samples)
+        # Note that probs has shape
+        # (batch, num_colors, channels, height, width)
+        probs = F.softmax(logits, dim=1)
+
+        # Calculate probability of each pixel
+        for i in range(height):
+            for j in range(width):
+                for k in range(num_channels):
+                    # Get the batch of true values at pixel (k, i, j)
+                    true_vals = samples[:, k, i, j]
+                    # Get probability assigned by model to true pixel
+                    probs_pixel = probs[:, true_vals, k, i, j][:, 0]
+                    # Add log probs (1e-9 to avoid log(0))
+                    log_probs += torch.log(probs_pixel + 1e-9)
+
+# -------------------------------------------------------------------------------------------------------------
+# From https://github.com/ShengjiaZhao/PixelCNN/blob/3075ae9e4417b1c78612ecdf328a8c49259f863f/models.py
+self.loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.fc2, labels=self.X))
+self.nll = self.loss * conf.img_width * conf.img_height
+self.sample_nll = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.fc2, labels=self.X), axis=[1, 2, 3])
