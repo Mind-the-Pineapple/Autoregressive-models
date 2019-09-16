@@ -278,3 +278,57 @@ def main():
 self.loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.fc2, labels=self.X))
 self.nll = self.loss * conf.img_width * conf.img_height
 self.sample_nll = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.fc2, labels=self.X), axis=[1, 2, 3])
+
+# -------------------------------------------------------------------------------------------------------------
+# From https://github.com/kkleidal/GatedPixelCNNPyTorch/blob/master/mnist_pixelcnn_train.py
+
+
+def evaluate(self, show_prog=False):
+    nll_total = 0
+    Ntotal = 0
+    if show_prog:
+        print("Evaluating...")
+        prog = tqdm.tqdm(total=len(self.ds))
+    for i, (labels, x, _) in enumerate(self.loader, 0):
+        N, labels, x, x_quant = preprocess(self.args, labels, x)
+        logits = self.model(x, labels=labels)
+        nll = negative_log_likelihood(logits, x_quant)
+        nll_total = nll_total + nll.data * N
+        Ntotal = Ntotal + N
+        if show_prog:
+            prog.update(N)
+    if show_prog:
+        prog.close()
+    nll = nll_total / Ntotal
+    return nll
+
+
+def quantisize(images, levels):
+    return (np.digitize(images, np.arange(levels) / levels) - 1).astype('i')
+
+def preprocess(args, labels, x):
+    x_quant = torch.from_numpy(quantisize(x.numpy(),
+        args.levels)).type(torch.LongTensor)
+    x = x_quant.float() / (args.levels - 1)
+    if args.gpu:
+        x = x.cuda()
+        x_quant = x_quant.cuda()
+        labels = labels.cuda()
+    x = Variable(x, requires_grad=False)
+    x_quant = Variable(x_quant, requires_grad=False)
+    N = x.size(0)
+    labels = Variable(labels, requires_grad=False)
+    return N, labels, x, x_quant
+
+
+def negative_log_likelihood(logits, x_quant, dim=1):
+    log_probs = F.log_softmax(logits, dim=dim)
+    flatten = lambda x, shape: x.transpose(1, -1).contiguous().view(*shape)
+    size_factor = float(np.prod([x for i, x in enumerate(logits.size()) if i not in {0, dim}]).astype(np.float32))
+    nll = torch.nn.functional.nll_loss(
+            flatten(log_probs, (-1, args.levels)),
+            flatten(x_quant, (-1,))) * size_factor
+    return nll
+
+# -------------------------------------------------------------------------------------------------------------
+# From https://colab.research.google.com/github/tensorchiefs/dl_book/blob/master/chapter_04/nb_ch04_02.ipynb#scrollTo=n-nSWXYadTft
