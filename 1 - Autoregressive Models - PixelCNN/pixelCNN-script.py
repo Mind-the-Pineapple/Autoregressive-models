@@ -40,17 +40,17 @@ class MaskedConv2D(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         self.kernel = self.add_weight("kernel",
-                                        shape=(self.kernel_size,
-                                               self.kernel_size,
-                                               int(input_shape[-1]),
-                                               self.filters),
-                                        initializer=self.kernel_initializer,
-                                        trainable=True)
+                                      shape=(self.kernel_size,
+                                             self.kernel_size,
+                                             int(input_shape[-1]),
+                                             self.filters),
+                                      initializer=self.kernel_initializer,
+                                      trainable=True)
 
         self.bias = self.add_weight("bias",
-                                      shape=(self.filters,),
-                                      initializer=self.bias_initializer,
-                                      trainable=True)
+                                    shape=(self.filters,),
+                                    initializer=self.bias_initializer,
+                                    trainable=True)
 
         mask = np.ones(self.kernel.shape, dtype=np.float32)
         mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
@@ -286,7 +286,7 @@ for i in range(occlude_start_row, 28):
         next_sample = B[:, i, j, 0, :]
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
-fig = plt.figure(figsize=(10,10))
+fig = plt.figure(figsize=(10, 10))
 for x in range(1, 10):
     for y in range(1, 10):
         ax = fig.add_subplot(10, 10, 10 * y + x)
