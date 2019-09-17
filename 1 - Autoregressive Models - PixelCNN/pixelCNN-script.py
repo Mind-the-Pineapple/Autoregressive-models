@@ -1,7 +1,4 @@
-"""Script to train pixelCNN on the MNIST dataset.
-
-
-"""
+"""Script to train pixelCNN on the MNIST dataset."""
 import random as rn
 import time
 
@@ -99,13 +96,13 @@ class ResidualBlock(tf.keras.Model):
         return x
 
 
-def quantisize(images, q_levels):
-    """Digitize image into q levels"""
+def quantise(images, q_levels):
+    """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
 
 def sample_from(distribution):
-    """"""
+    """Sample random values from distribution"""
     batch_size, bins = distribution.shape
     return np.array([np.random.choice(bins, p=distr) for distr in distribution])
 
@@ -135,10 +132,10 @@ x_train = x_train.reshape(x_train.shape[0], height, width, 1)
 x_test = x_test.reshape(x_test.shape[0], height, width, 1)
 
 # --------------------------------------------------------------------------------------------------------------
-# Quantisize the input data in q levels
+# Quantise the input data in q levels
 q_levels = 256
-x_train_quantised = quantisize(x_train, q_levels)
-x_test_quantised = quantisize(x_test, q_levels)
+x_train_quantised = quantise(x_train, q_levels)
+x_test_quantised = quantise(x_test, q_levels)
 
 # --------------------------------------------------------------------------------------------------------------
 # Creating input stream using tf.data API
@@ -156,7 +153,6 @@ test_dataset = test_dataset.batch(batch_size)
 
 # --------------------------------------------------------------------------------------------------------------
 # Create PixelCNN model
-
 inputs = keras.layers.Input(shape=(height, width, n_channel))
 x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
 
@@ -172,8 +168,9 @@ x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
 # --------------------------------------------------------------------------------------------------------------
-lr_decay = 0.999995
-learning_rate = 3e-4
+# Prepare optimizer and loss function
+lr_decay = 0.9995
+learning_rate = 1e-3
 optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
 compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
@@ -198,8 +195,8 @@ def train_step(batch_x, batch_y):
 
 
 # --------------------------------------------------------------------------------------------------------------
-# Training
-n_epochs = 10
+# Training loop
+n_epochs = 30
 n_iter = int(np.ceil(x_train_quantised.shape[0] / batch_size))
 for epoch in range(n_epochs):
     start_epoch = time.time()
@@ -208,7 +205,7 @@ for epoch in range(n_epochs):
         optimizer.lr = optimizer.lr * lr_decay
         loss = train_step(batch_x, batch_y)
         iter_time = time.time() - start
-        if i_iter % 50 == 0:
+        if i_iter % 100 == 0:
             print('EPOCH {:3d}: ITER {:4d}/{:4d} TIME: {:.2f} LOSS: {:.4f}'.format(epoch,
                                                                                    i_iter, n_iter,
                                                                                    iter_time,
@@ -222,45 +219,29 @@ for epoch in range(n_epochs):
 test_loss = []
 for batch_x, batch_y in test_dataset:
     logits = pixelcnn(batch_x, training=False)
-
-    # Calculate pixel probs according to the model
     logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
     logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
 
-    # Note that probs has shape
-    # (batch, height, width, channels, num_colors)
-    probs = tf.nn.softmax(logits)
+    # Calculate cross-entropy (= negative log-likelihood)
+    loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
 
-    # Calculate probability of each pixel
-    for i in range(batch_x.shape[0]):
-        log_probs = 0
-        for j in range(height):
-            for k in range(width):
-                for l in range(n_channel):
-                    # Get the batch of true values at pixel (k, i, j)
-                    true_vals = batch_y[i, j, k, l]
-                    # Get probability assigned by model to true pixel
-                    probs_pixel = probs[i, j, k, l, true_vals]
-                    # Add log probs (1e-9 to avoid log(0))
-                    log_probs += np.log(probs_pixel + 1e-9)
-
-        test_loss.append(loss)
-print('nll:{:}'.format(np.array(test_loss).mean()))
-print('bits/dim:{:}'.format(np.array(test_loss).mean() / (28 * 28)))
+    test_loss.append(loss)
+print('nll : {:} nats'.format(np.array(test_loss).mean()))
+print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
 samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
 for i in range(28):
     for j in range(28):
-        A = pixelcnn(samples)
-        A = tf.reshape(A, [-1, height, width, q_levels, n_channel])
-        A = tf.transpose(A, perm=[0, 1, 2, 4, 3])
-        B = tf.nn.softmax(A)
-        next_sample = B[:, i, j, 0, :]
+        logits = pixelcnn(samples)
+        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
+        probs = tf.nn.softmax(logits)
+        next_sample = probs[:, i, j, 0, :]
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
-fig = plt.figure()
+fig = plt.figure(figsize=(10, 10))
 for x in range(1, 10):
     for y in range(1, 10):
         ax = fig.add_subplot(10, 10, 10 * y + x)
@@ -277,13 +258,13 @@ samples = np.copy(x_test_quantised[0:num_generated_images, :, :, :])
 samples = samples / (q_levels - 1)
 samples[:, occlude_start_row:, :, :] = 0
 
-for i in range(occlude_start_row, 28):
-    for j in range(28):
-        A = pixelcnn(samples)
-        A = tf.reshape(A, [-1, height, width, q_levels, n_channel])
-        A = tf.transpose(A, perm=[0, 1, 2, 4, 3])
-        B = tf.nn.softmax(A)
-        next_sample = B[:, i, j, 0, :]
+for i in range(occlude_start_row, height):
+    for j in range(width):
+        logits = pixelcnn(samples)
+        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
+        probs = tf.nn.softmax(logits)
+        next_sample = probs[:, i, j, 0, :]
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
