@@ -12,68 +12,24 @@ from tensorflow import keras
 
 # https://github.com/suga93/pixelcnn_keras/blob/master/core/layers.py
 
-class MaskedConv2D(tf.keras.layers.Layer):
-    """Convolutional layers with masks for autoregressive models
-
-    Convolutional layers with simple implementation to have masks type A and B.
-    """
-
+class CroppedConv2D(tf.keras.Model):
+    """"""
     def __init__(self,
-                 mask_type,
                  filters,
                  kernel_size,
-                 strides=1,
-                 padding='same',
-                 kernel_initializer='glorot_uniform',
-                 bias_initializer='zeros'):
-        super(MaskedConv2D, self).__init__()
+                 strides=1):
+        super(CroppedConv2D, self).__init__(name='')
 
-        assert mask_type in {'A', 'B', 'V'}
-        self.mask_type = mask_type
+        self.padding = keras.layers.ZeroPadding2D(padding=((kernel_size[0]//2, 0), (kernel_size[1]//2, kernel_size[1]//2)))
+        self.conv = keras.layers.Conv2D(filters=filters,
+                                        kernel_size=[kernel_size[0]//2+1, kernel_size[1]],
+                                        strides=strides,
+                                        padding='valid')
 
-        self.filters = filters
-
-        if isinstance(kernel_size, int):
-            kernel_size = (kernel_size, kernel_size)
-        self.kernel_size = kernel_size
-
-        self.strides = strides
-        self.padding = padding.upper()
-        self.kernel_initializer = keras.initializers.get(kernel_initializer)
-        self.bias_initializer = keras.initializers.get(bias_initializer)
-
-    def build(self, input_shape):
-        kernel_h, kernel_w = self.kernel_size
-
-        self.kernel = self.add_weight("kernel",
-                                      shape=(kernel_h,
-                                             kernel_w,
-                                             int(input_shape[-1]),
-                                             self.filters),
-                                      initializer=self.kernel_initializer,
-                                      trainable=True)
-
-        self.bias = self.add_weight("bias",
-                                    shape=(self.filters,),
-                                    initializer=self.bias_initializer,
-                                    trainable=True)
-
-        mask = np.ones(self.kernel.shape, dtype=np.float32)
-        if self.mask_type == 'V':
-            mask[kernel_h // 2:, :, :, :] = 0.
-        else:
-            mask[kernel_h // 2, kernel_w // 2 + (self.mask_type == 'B'):, :, :] = 0.
-            mask[kernel_h // 2 + 1:, :, :] = 0.
-
-        self.mask = tf.constant(mask,
-                                dtype=tf.float32,
-                                name='mask')
-
-    def call(self, input):
-        masked_kernel = tf.math.multiply(self.mask, self.kernel)
-        x = tf.nn.conv2d(input, masked_kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
-        x = tf.nn.bias_add(x, self.bias)
-        return x
+        def call(self, input_tensor):
+            net = self.padding(input_tensor)
+            output = self.conv(net)
+            return output
 
 
 class CroppedConvolution(tf.keras.layers.Layer):
@@ -93,24 +49,27 @@ class CroppedConvolution(tf.keras.layers.Layer):
         self.bias_initializer = keras.initializers.get(bias_initializer)
 
     def build(self, input_shape):
-        self.kernel = self.add_variable("kernel",
-                                        shape=(self.kernel_size,
-                                               self.kernel_size,
-                                               int(input_shape[-1]),
-                                               self.filters),
-                                        initializer=self.kernel_initializer,
-                                        trainable=True)
+        kernel_h, kernel_w = self.kernel_size
 
-        self.bias = self.add_variable("bias",
-                                      shape=(self.filters,),
-                                      initializer=self.bias_initializer,
+        self.kernel = self.add_weight("kernel",
+                                      shape=(kernel_h,
+                                             kernel_w,
+                                             int(input_shape[-1]),
+                                             self.filters),
+                                      initializer=self.kernel_initializer,
                                       trainable=True)
+
+        self.bias = self.add_weight("bias",
+                                    shape=(self.filters,),
+                                    initializer=self.bias_initializer,
+                                    trainable=True)
 
         h_crop = -(kh + 1) if pad_h == kh else None
         w_crop = -(kw + 1) if pad_w == kw else None
         pad = [[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]]
 
     def call(self, input):
+        tf.keras.layers.ZeroPadding2D()
         x = tf.nn.conv2d(input, self.kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
         x = tf.nn.bias_add(x, self.bias)
         return x
@@ -122,8 +81,27 @@ class GatedBlock(tf.keras.Model):
     def __init__(self, n_filters):
         super(GatedBlock, self).__init__(name='')
 
-        self.vertical_conv = MaskedConv2D(2 * n_filters, kernel_size=3, mask_type='V')
-        self.horizontal_conv = MaskedConv2D(2 * n_filters, kernel_size=(1, 3))
+        self.padding_v = keras.layers.ZeroPadding2D(padding=((3//2, 0), (3//2, 3//2)))
+        self.conv_v = keras.layers.Conv2D(filters=2*n_filters,
+                                        kernel_size=[3//2+1, 3],
+                                        strides=1,
+                                        padding='valid')
+        self.padding_v2 = keras.layers.ZeroPadding2D(padding=((1, 0), (0, 0)))
+        self.cropping = keras.layers.Cropping2D(cropping=((0, 1), (0, 0)))
+
+        self.padding_h = keras.layers.ZeroPadding2D(padding=((0, 0), (3 // 2, 0)))
+        self.conv_h = keras.layers.Conv2D(filters = 2 *n_filters,
+                                  kernel_size = [1, 3 // 2+1],
+                                  strides=1,
+                                  padding='valid')
+        # if A
+        # self.conv_h = keras.layers.Conv2D(filters = 2 *n_filters,
+        #                           kernel_size = [1, 3 // 2],
+        #                           strides=1,
+        #                           padding='valid')
+        # self.padding_v2 = keras.layers.ZeroPadding2D(padding=((0, 0), (1, 0)))
+        # self.cropping = keras.layers.Cropping2D(cropping=((0, 0), (0, 1)))
+
         self.v_to_h_conv = keras.layers.Conv2D(filters=2 * n_filters, kernel_size=1)
 
         self.horizontal_output = keras.layers.Conv2D(filters=n_filters, kernel_size=1)
@@ -134,8 +112,16 @@ class GatedBlock(tf.keras.Model):
 
     def call(self, input_tensor):
         v, h = tf.split(input_tensor, 2, axis=-1)
-        horizontal_preactivation = self.horizontal_conv(h)  # 1xN
-        vertical_preactivation = self.vertical_conv(v)  # NxN
+
+        # vertical_preactivation = self.vertical_conv(v)  # NxN
+        vertical_preactivation = self.padding_v(v)
+        vertical_preactivation = self.conv_v(vertical_preactivation)
+        vertical_preactivation = self.padding_v2(vertical_preactivation)
+        vertical_preactivation = self.cropping(vertical_preactivation)
+
+        horizontal_preactivation = self.padding_h(h)  # 1xN
+        horizontal_preactivation = self.conv_h(horizontal_preactivation)  # 1xN
+
         v_to_h = self.v_to_h_conv(vertical_preactivation)  # 1x1
         v_out = self._gate(vertical_preactivation)
 
@@ -148,6 +134,18 @@ class GatedBlock(tf.keras.Model):
 
         output = tf.concat((v_out, h_out), axis=-1)
         return output
+
+
+
+#
+#         # tf.keras.layers.Cropping2D
+#
+# CroppedConvolution(
+#                 in_channels, out_channels, ksize=[filter_size//2+1, filter_size],
+#                 pad=[filter_size//2+1, filter_size//2]),
+
+
+
 
 
 

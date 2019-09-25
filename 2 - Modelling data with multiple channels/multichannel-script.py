@@ -215,6 +215,7 @@ for epoch in range(n_epochs):
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
+# TODO: Fix generation of chanels
 samples = (np.random.rand(100, 32, 32, 3) * 0.01).astype('float32')
 for i in range(32):
     for j in range(32):

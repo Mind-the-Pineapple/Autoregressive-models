@@ -80,14 +80,17 @@ class MaskedConv2D(tf.keras.layers.Layer):
 class GatedBlock(tf.keras.Model):
     """"""
 
-    def __init__(self, n_filters):
+    def __init__(self,
+                 mask_type,
+                 filters,
+                 kernel_size):
         super(GatedBlock, self).__init__(name='')
 
-        self.vertical_conv = MaskedConv2D(2 * n_filters, kernel_size=3, mask_type='V')
-        self.horizontal_conv = MaskedConv2D(2 * n_filters, kernel_size=(1, 3))
-        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * n_filters, kernel_size=1)
+        self.vertical_conv = MaskedConv2D(mask_type='V', filters=2*filters, kernel_size=kernel_size)
+        self.horizontal_conv = MaskedConv2D(mask_type='V', filters=2*filters, kernel_size=(1, kernel_size))
+        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * filters, kernel_size=1)
 
-        self.horizontal_output = keras.layers.Conv2D(filters=n_filters, kernel_size=1)
+        self.horizontal_output = keras.layers.Conv2D(filters=filters, kernel_size=1)
 
     def _gate(self, x):
         tanh_preactivation, sigmoid_preactivation = tf.split(x, 2, axis=-1)
@@ -174,10 +177,12 @@ test_dataset = test_dataset.batch(batch_size)
 # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
 
 inputs = keras.layers.Input(shape=(height, width, n_channel))
-x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
+x = keras.layers.Concatenate()([inputs, inputs])
+x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
+
 
 for i in range(7):
-    x = GatedBlock(n_filters=64)(x)
+    x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)
 
 v, h = tf.split(x, 2, axis=-1)
 
@@ -300,100 +305,3 @@ for x in range(1, 10):
         plt.xticks(np.array([]))
         plt.yticks(np.array([]))
 plt.show()
-
-
-# ---------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------
-
-class CroppedConvolution(L.Convolution2D):
-def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-
-def __call__(self, x):
-    ret = super().__call__(x)
-    kh, kw = self.ksize
-    pad_h, pad_w = self.pad
-    h_crop = -(kh + 1) if pad_h == kh else None
-    w_crop = -(kw + 1) if pad_w == kw else None
-
-    return ret[:, :, :h_crop, :w_crop]
-
-
-def down_shift(x):
-xs = int_shape(x)
-return tf.concat([tf.zeros([xs[0], 1, xs[2], xs[3]]), x[:, :xs[1] - 1, :, :]], 1)
-
-
-def right_shift(x):
-xs = int_shape(x)
-return tf.concat([tf.zeros([xs[0], xs[1], 1, xs[3]]), x[:, :, :xs[2] - 1, :]], 2)
-
-
-class CroppedConvolution(tf.keras.layers.Layer):
-
-def __init__(self,
-             filters,
-             kernel_size,
-             strides=1,
-             kernel_initializer='glorot_uniform',
-             bias_initializer='zeros'):
-    super(CroppedConvolution, self).__init__()
-
-    self.strides = strides
-    self.filters = filters
-    self.kernel_size = kernel_size
-    self.kernel_initializer = keras.initializers.get(kernel_initializer)
-    self.bias_initializer = keras.initializers.get(bias_initializer)
-
-def build(self, input_shape):
-    self.kernel = self.add_variable("kernel",
-                                    shape=(self.kernel_size,
-                                           self.kernel_size,
-                                           int(input_shape[-1]),
-                                           self.filters),
-                                    initializer=self.kernel_initializer,
-                                    trainable=True)
-
-    self.bias = self.add_variable("bias",
-                                  shape=(self.filters,),
-                                  initializer=self.bias_initializer,
-                                  trainable=True)
-
-    h_crop = -(kh + 1) if pad_h == kh else None
-    w_crop = -(kw + 1) if pad_w == kw else None
-    pad = [[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]]
-
-def call(self, input):
-    x = tf.nn.conv2d(input, self.kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
-    x = tf.nn.bias_add(x, self.bias)
-    return x
-
-
-@add_arg_scope
-def down_shifted_conv2d(x, num_filters, filter_size=[2, 3], stride=[1, 1], **kwargs):
-x = tf.pad(x, [[0, 0], [filter_size[0] - 1, 0], [int((filter_size[1] - 1) / 2), int((filter_size[1] - 1) / 2)],
-               [0, 0]])
-return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
-
-
-@add_arg_scope
-def down_shifted_deconv2d(x, num_filters, filter_size=[2, 3], stride=[1, 1], **kwargs):
-x = deconv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
-xs = int_shape(x)
-return x[:, :(xs[1] - filter_size[0] + 1), int((filter_size[1] - 1) / 2):(xs[2] - int((filter_size[1] - 1) / 2)), :]
-
-
-@add_arg_scope
-def down_right_shifted_conv2d(x, num_filters, filter_size=[2, 2], stride=[1, 1], **kwargs):
-x = tf.pad(x, [[0, 0], [filter_size[0] - 1, 0], [filter_size[1] - 1, 0], [0, 0]])
-return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
-
-
-@add_arg_scope
-def down_right_shifted_deconv2d(x, num_filters, filter_size=[2, 2], stride=[1, 1], **kwargs):
-x = deconv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
-xs = int_shape(x)
-
-
-return x[:, :(xs[1] - filter_size[0] + 1):, :(xs[2] - filter_size[1] + 1), :]
