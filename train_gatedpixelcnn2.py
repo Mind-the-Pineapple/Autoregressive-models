@@ -80,14 +80,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
 class GatedBlock(tf.keras.Model):
     """"""
 
-    def __init__(self,
-                 mask_type,
-                 filters,
-                 kernel_size):
+    def __init__(self, mask_type, filters, kernel_size):
         super(GatedBlock, self).__init__(name='')
 
-        self.vertical_conv = MaskedConv2D(mask_type='V', filters=2*filters, kernel_size=kernel_size)
-        self.horizontal_conv = MaskedConv2D(mask_type='V', filters=2*filters, kernel_size=(1, kernel_size))
+        self.vertical_conv = MaskedConv2D(mask_type='V', filters=2 * filters, kernel_size=kernel_size)
+        self.horizontal_conv = MaskedConv2D(mask_type=mask_type, filters=2 * filters, kernel_size=(1, kernel_size))
         self.v_to_h_conv = keras.layers.Conv2D(filters=2 * filters, kernel_size=1)
 
         self.horizontal_output = keras.layers.Conv2D(filters=filters, kernel_size=1)
@@ -114,7 +111,6 @@ class GatedBlock(tf.keras.Model):
         return output
 
 
-
 def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
@@ -133,7 +129,6 @@ random_seed = 42
 tf.random.set_seed(random_seed)
 np.random.seed(random_seed)
 rn.seed(random_seed)
-
 
 # --------------------------------------------------------------------------------------------------------------
 # Loading data
@@ -155,7 +150,6 @@ q_levels = 256
 x_train_quantised = quantise(x_train, q_levels)
 x_test_quantised = quantise(x_test, q_levels)
 
-
 # --------------------------------------------------------------------------------------------------------------
 # Creating input stream using tf.data API
 batch_size = 128
@@ -170,15 +164,15 @@ test_dataset = tf.data.Dataset.from_tensor_slices((x_test_quantised / (q_levels 
                                                    x_test_quantised.astype('int32')))
 test_dataset = test_dataset.batch(batch_size)
 
-
 # --------------------------------------------------------------------------------------------------------------
 # Create PixelCNN model
 # https://github.com/RishabGoel/PixelCNN/blob/master/pixel_cnn.py
 # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
 
 inputs = keras.layers.Input(shape=(height, width, n_channel))
-x = keras.layers.Concatenate()([inputs, inputs])
-x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
+# x = keras.layers.Concatenate()([inputs, inputs])
+# x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
+x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
 
 
 for i in range(7):
@@ -190,7 +184,6 @@ x = keras.layers.Activation(activation='relu')(h)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 
 x = keras.layers.Activation(activation='relu')(x)
-x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
@@ -220,6 +213,7 @@ def train_step(batch_x, batch_y):
     optimizer.apply_gradients(zip(gradients, pixelcnn.trainable_variables))
 
     return loss
+
 
 # --------------------------------------------------------------------------------------------------------------
 # Training loop
@@ -257,7 +251,6 @@ for batch_x, batch_y in test_dataset:
 print('nll : {:} nats'.format(np.array(test_loss).mean()))
 print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
-
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
 samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
@@ -278,7 +271,6 @@ for x in range(1, 10):
         plt.xticks(np.array([]))
         plt.yticks(np.array([]))
 plt.show()
-
 
 # --------------------------------------------------------------------------------------------------------------
 # Filling occluded images

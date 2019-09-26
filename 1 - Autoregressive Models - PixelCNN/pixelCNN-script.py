@@ -162,7 +162,6 @@ for i in range(15):
 x = keras.layers.Activation(activation='relu')(x)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Activation(activation='relu')(x)
-x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
