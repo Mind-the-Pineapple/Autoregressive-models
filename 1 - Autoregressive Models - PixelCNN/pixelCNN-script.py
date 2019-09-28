@@ -100,7 +100,7 @@ def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
-
+# TODO: MUDAR PARA np.random.multinomial
 def sample_from(distribution):
     """Sample random values from distribution"""
     batch_size, bins = distribution.shape

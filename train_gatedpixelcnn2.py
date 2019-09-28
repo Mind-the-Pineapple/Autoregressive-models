@@ -253,8 +253,8 @@ print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
 samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
-for i in range(28):
-    for j in range(28):
+for i in range(height):
+    for j in range(width):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
