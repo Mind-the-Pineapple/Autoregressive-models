@@ -170,10 +170,10 @@ test_dataset = test_dataset.batch(batch_size)
 # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
 
 inputs = keras.layers.Input(shape=(height, width, n_channel))
-# x = keras.layers.Concatenate()([inputs, inputs])
-# x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
-x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
+v = MaskedConv2D(mask_type='V', filters=64, kernel_size=7)(inputs)
+h = MaskedConv2D(mask_type='A', filters=64, kernel_size=(1, 7))(inputs)
 
+x = keras.layers.Concatenate()([v, h])
 
 for i in range(7):
     x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)

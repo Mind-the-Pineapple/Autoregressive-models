@@ -18,7 +18,7 @@ class GatedBlock(tf.keras.Model):
         super(GatedBlock, self).__init__(name='')
 
         self.mask_type = mask_type
-        self.vertical_padding = keras.layers.ZeroPadding2D(padding=((kernel_size//2+1, 0),
+        self.vertical_padding = keras.layers.ZeroPadding2D(padding=((kernel_size//2-1, 0),
                                                                     (kernel_size//2, kernel_size//2)))
 
         self.vertical_conv = keras.layers.Conv2D(filters=2 * filters,
@@ -26,7 +26,6 @@ class GatedBlock(tf.keras.Model):
                                                  strides=1,
                                                  padding='valid')
 
-        self.vertical_padding2 = keras.layers.ZeroPadding2D(padding=((1, 0), (0, 0)))
         self.vertical_cropping = keras.layers.Cropping2D(cropping=((0, 1), (0, 0)))
 
         self.horizontal_padding = keras.layers.ZeroPadding2D(padding=((0, 0), (kernel_size // 2, 0)))
@@ -325,3 +324,104 @@ xs = int_shape(x)
 
 
 return x[:, :(xs[1] - filter_size[0] + 1):, :(xs[2] - filter_size[1] + 1), :]
+
+
+# ---------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
+# https://github.com/pclucas14/pixel-cnn-pp/blob/master/model.py
+# PIXELCNN++
+
+self.u_init = down_shifted_conv2d(input_channels + 1, nr_filters, filter_size=(2, 3),
+                                  shift_output_down=True)
+
+self.ul_init = nn.ModuleList([down_shifted_conv2d(input_channels + 1, nr_filters,
+                                                  filter_size=(1, 3), shift_output_down=True),
+                              down_right_shifted_conv2d(input_channels + 1, nr_filters,
+                                                        filter_size=(2, 1), shift_output_right=True)])
+
+u_list = [self.u_init(x)]
+ul_list = [self.ul_init[0](x) + self.ul_init[1](x)]
+
+self.right_shift_pad = nn.ZeroPad2d((1, 0, 0, 0))
+self.down_shift_pad = nn.ZeroPad2d((0, 0, 1, 0))
+
+
+''' utilities for shifting the image around, efficient alternative to masking convolutions '''
+def down_shift(x, pad=None):
+    # Pytorch ordering
+    xs = [int(y) for y in x.size()]
+    # when downshifting, the last row is removed
+    x = x[:, :, :xs[2] - 1, :]
+    # padding left, padding right, padding top, padding bottom
+    pad = nn.ZeroPad2d((0, 0, 1, 0)) if pad is None else pad
+    return pad(x)
+
+
+def right_shift(x, pad=None):
+    # Pytorch ordering
+    xs = [int(y) for y in x.size()]
+    # when righshifting, the last column is removed
+    x = x[:, :, :, :xs[3] - 1]
+    # padding left, padding right, padding top, padding bottom
+    pad = nn.ZeroPad2d((1, 0, 0, 0)) if pad is None else pad
+    return pad(x)
+
+
+
+class down_shifted_conv2d(nn.Module):
+    def __init__(self, num_filters_in, num_filters_out, filter_size=(2, 3), stride=(1, 1),
+                 shift_output_down=False, norm='weight_norm'):
+        super(down_shifted_conv2d, self).__init__()
+
+        assert norm in [None, 'batch_norm', 'weight_norm']
+        self.conv = nn.Conv2d(num_filters_in, num_filters_out, filter_size, stride)
+        self.shift_output_down = shift_output_down
+        self.norm = norm
+        self.pad = nn.ZeroPad2d((int((filter_size[1] - 1) / 2),  # pad left
+                                 int((filter_size[1] - 1) / 2),  # pad right
+                                 filter_size[0] - 1,  # pad top
+                                 0))  # pad down
+
+        if norm == 'weight_norm':
+            self.conv = wn(self.conv)
+        elif norm == 'batch_norm':
+            self.bn = nn.BatchNorm2d(num_filters_out)
+
+        if shift_output_down:
+            self.down_shift = lambda x: down_shift(x, pad=nn.ZeroPad2d((0, 0, 1, 0)))
+
+    def forward(self, x):
+        x = self.pad(x)
+        x = self.conv(x)
+        x = self.bn(x) if self.norm == 'batch_norm' else x
+        return self.down_shift(x) if self.shift_output_down else x
+
+
+class down_right_shifted_conv2d(nn.Module):
+    def __init__(self, num_filters_in, num_filters_out, filter_size=(2, 2), stride=(1, 1),
+                 shift_output_right=False, norm='weight_norm'):
+        super(down_right_shifted_conv2d, self).__init__()
+
+        assert norm in [None, 'batch_norm', 'weight_norm']
+        self.pad = nn.ZeroPad2d((filter_size[1] - 1, 0, filter_size[0] - 1, 0))
+        self.conv = nn.Conv2d(num_filters_in, num_filters_out, filter_size, stride=stride)
+        self.shift_output_right = shift_output_right
+        self.norm = norm
+
+        if norm == 'weight_norm':
+            self.conv = wn(self.conv)
+        elif norm == 'batch_norm':
+            self.bn = nn.BatchNorm2d(num_filters_out)
+
+        if shift_output_right:
+            self.right_shift = lambda x: right_shift(x, pad=nn.ZeroPad2d((1, 0, 0, 0)))
+
+    def forward(self, x):
+        x = self.pad(x)
+        x = self.conv(x)
+        x = self.bn(x) if self.norm == 'batch_norm' else x
+        return self.right_shift(x) if self.shift_output_right else x
+
+
+

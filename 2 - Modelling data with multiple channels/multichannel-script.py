@@ -1,7 +1,4 @@
-"""Script to train pixelCNN on the MNIST dataset.
-
-
-"""
+"""Script to train pixelCNN on the CIFAR10 dataset."""
 import random as rn
 import time
 
@@ -39,18 +36,18 @@ class MaskedConv2D(tf.keras.layers.Layer):
         self.bias_initializer = keras.initializers.get(bias_initializer)
 
     def build(self, input_shape):
-        self.kernel = self.add_variable("kernel",
-                                        shape=(self.kernel_size,
-                                               self.kernel_size,
-                                               int(input_shape[-1]),
-                                               self.filters),
-                                        initializer=self.kernel_initializer,
-                                        trainable=True)
-
-        self.bias = self.add_variable("bias",
-                                      shape=(self.filters,),
-                                      initializer=self.bias_initializer,
+        self.kernel = self.add_weight("kernel",
+                                      shape=(self.kernel_size,
+                                             self.kernel_size,
+                                             int(input_shape[-1]),
+                                             self.filters),
+                                      initializer=self.kernel_initializer,
                                       trainable=True)
+
+        self.bias = self.add_weight("bias",
+                                    shape=(self.filters,),
+                                    initializer=self.bias_initializer,
+                                    trainable=True)
 
         mask = np.ones(self.kernel.shape, dtype=np.float32)
         mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
@@ -65,6 +62,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
         x = tf.nn.conv2d(input, masked_kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
         x = tf.nn.bias_add(x, self.bias)
         return x
+
 
 
 class ResidualBlock(tf.keras.Model):
@@ -123,15 +121,19 @@ rn.seed(random_seed)
 # Loading data
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
+height = 32
+width = 32
+n_channel = 3
+
 x_train = x_train.astype('float32') / 255.
 x_test = x_test.astype('float32') / 255.
 
-x_train = x_train.reshape(x_train.shape[0], 32, 32, 3)
-x_test = x_test.reshape(x_test.shape[0], 32, 32, 3)
+x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
+x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
 
 # --------------------------------------------------------------------------------------------------------------
 # Quantisize the input data in q levels
-q_levels = 256
+q_levels = 128
 x_train_quantised = quantisize(x_train, q_levels)
 x_test_quantised = quantisize(x_test, q_levels)
 
@@ -151,9 +153,7 @@ test_dataset = test_dataset.batch(batch_size)
 
 # --------------------------------------------------------------------------------------------------------------
 # Create PixelCNN model
-n_channel = 3
-
-inputs = keras.layers.Input(shape=(32, 32, 3))
+inputs = keras.layers.Input(shape=(height, width, n_channel))
 x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
 
 for i in range(15):
@@ -162,12 +162,15 @@ for i in range(15):
 x = keras.layers.Activation(activation='relu')(x)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Activation(activation='relu')(x)
-x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
-learning_rate = 3e-4
+
+# --------------------------------------------------------------------------------------------------------------
+# Prepare optimizer and loss function
+lr_decay = 0.9995
+learning_rate = 1e-3
 optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
 compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
@@ -179,7 +182,7 @@ def train_step(batch_x, batch_y):
     with tf.GradientTape() as ae_tape:
         logits = pixelcnn(batch_x, training=True)
 
-        logits = tf.reshape(logits, [-1, 32, 32, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
 
         loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
@@ -190,18 +193,18 @@ def train_step(batch_x, batch_y):
 
     return loss
 
-
 # --------------------------------------------------------------------------------------------------------------
-# Training
-n_epochs = 10
+# Training loop
+n_epochs = 30
 n_iter = int(np.ceil(x_train_quantised.shape[0] / batch_size))
 for epoch in range(n_epochs):
     start_epoch = time.time()
     for i_iter, (batch_x, batch_y) in enumerate(train_dataset):
         start = time.time()
+        optimizer.lr = optimizer.lr * lr_decay
         loss = train_step(batch_x, batch_y)
         iter_time = time.time() - start
-        if i_iter % 50 == 0:
+        if i_iter % 100 == 0:
             print('EPOCH {:3d}: ITER {:4d}/{:4d} TIME: {:.2f} LOSS: {:.4f}'.format(epoch,
                                                                                    i_iter, n_iter,
                                                                                    iter_time,
@@ -210,27 +213,41 @@ for epoch in range(n_epochs):
     print('EPOCH {:3d}: TIME: {:.2f} ETA: {:.2f}'.format(epoch,
                                                          epoch_time,
                                                          epoch_time * (n_epochs - epoch)))
+# --------------------------------------------------------------------------------------------------------------
+# Test
+test_loss = []
+for batch_x, batch_y in test_dataset:
+    logits = pixelcnn(batch_x, training=False)
+    logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+    logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
 
+    # Calculate cross-entropy (= negative log-likelihood)
+    loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
+
+    test_loss.append(loss)
+print('nll : {:} nats'.format(np.array(test_loss).mean()))
+print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-# TODO: Fix generation of chanels
-samples = (np.random.rand(100, 32, 32, 3) * 0.01).astype('float32')
-for i in range(32):
-    for j in range(32):
-        A = pixelcnn(samples)
-        A = tf.reshape(A, [-1, 32, 32, q_levels, n_channel])
-        A = tf.transpose(A, perm=[0, 1, 2, 4, 3])
-        B = tf.nn.softmax(A)
-        next_sample = B[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+samples = (np.random.rand(9, height, width, n_channel) * 0.01).astype('float32')
+for i in range(height):
+    for j in range(width):
+        for k in range(n_channel):
+            logits = pixelcnn(samples)
+            logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
+            probs = tf.nn.softmax(logits)
 
-fig = plt.figure()
-for x in range(1, 10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
+            next_sample = probs[:, i, j, k, :]
+            samples[:, i, j, k] = sample_from(next_sample.numpy()) / (q_levels - 1)
+
+fig = plt.figure(figsize=(10, 10))
+for x in range(1, 3):
+    for y in range(1, 3):
+        ax = fig.add_subplot(3, 3, 3 * y + x)
+        ax.imshow(samples[3 * y + x, :, :, :])
         plt.xticks(np.array([]))
         plt.yticks(np.array([]))
 plt.show()
