@@ -83,6 +83,7 @@ class GatedBlock(tf.keras.Model):
     def __init__(self, mask_type, filters, kernel_size):
         super(GatedBlock, self).__init__(name='')
 
+        self.mask_type = mask_type
         self.vertical_conv = MaskedConv2D(mask_type='V', filters=2 * filters, kernel_size=kernel_size)
         self.horizontal_conv = MaskedConv2D(mask_type=mask_type, filters=2 * filters, kernel_size=(1, kernel_size))
         self.v_to_h_conv = keras.layers.Conv2D(filters=2 * filters, kernel_size=1)
@@ -103,11 +104,11 @@ class GatedBlock(tf.keras.Model):
         horizontal_preactivation = horizontal_preactivation + v_to_h
         h_activated = self._gate(horizontal_preactivation)
 
-        h_preres = self.horizontal_output(h_activated)
+        if self.mask_type =='B':
+            h_activated = self.horizontal_output(h_activated)
+            h_activated = h + h_activated
 
-        h_out = h + h_preres
-
-        output = tf.concat((v_out, h_out), axis=-1)
+        output = tf.concat((v_out, h_activated), axis=-1)
         return output
 
 
@@ -170,10 +171,8 @@ test_dataset = test_dataset.batch(batch_size)
 # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
 
 inputs = keras.layers.Input(shape=(height, width, n_channel))
-v = MaskedConv2D(mask_type='V', filters=64, kernel_size=7)(inputs)
-h = MaskedConv2D(mask_type='A', filters=64, kernel_size=(1, 7))(inputs)
-
-x = keras.layers.Concatenate()([v, h])
+x = keras.layers.Concatenate()([inputs, inputs])
+x = GatedBlock(mask_type='A', filters=64, kernel_size=3)(x)
 
 for i in range(7):
     x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)
