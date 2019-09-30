@@ -110,6 +110,14 @@ class GatedBlock(tf.keras.Model):
 
         output = tf.concat((v_out, h_activated), axis=-1)
         return output
+    #
+    # # 1 by 1 convolution on horizontal stack
+    # h_conv2 = self.horizontal_conv_2(h_conv_activation)
+    # if self.restricted:
+    #     h_out = h_conv2
+    # else:
+    #     h_out = h_conv2 + h_input
+    # return v_out, h_out
 
 
 def quantise(images, q_levels):
@@ -198,7 +206,7 @@ compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
 # --------------------------------------------------------------------------------------------------------------
 @tf.function
-def train_step(batch_x, batch_y):
+def train_step(batch_x, batch_y, batch_label):
     with tf.GradientTape() as ae_tape:
         logits = pixelcnn(batch_x, training=True)
 

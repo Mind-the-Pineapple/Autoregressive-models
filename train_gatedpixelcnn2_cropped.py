@@ -106,7 +106,7 @@ x_test = x_test.reshape(x_test.shape[0], height, width, 1)
 
 # --------------------------------------------------------------------------------------------------------------
 # Quantise the input data in q levels
-q_levels = 256
+q_levels = 16
 x_train_quantised = quantise(x_train, q_levels)
 x_test_quantised = quantise(x_test, q_levels)
 
@@ -135,7 +135,7 @@ inputs = keras.layers.Input(shape=(height, width, n_channel))
 x = keras.layers.Concatenate()([inputs, inputs])
 x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
 
-for i in range(7):
+for i in range(5):
     x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)
 
 v, h = tf.split(x, 2, axis=-1)

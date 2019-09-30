@@ -100,12 +100,6 @@ def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
-# TODO: MUDAR PARA np.random.multinomial
-def sample_from(distribution):
-    """Sample random values from distribution"""
-    batch_size, bins = distribution.shape
-    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
-
 
 # def main():
 
@@ -236,9 +230,8 @@ for i in range(height):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        probs = tf.nn.softmax(logits)
-        next_sample = probs[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
 
 fig = plt.figure(figsize=(10, 10))
 for x in range(1, 10):
@@ -262,9 +255,8 @@ for i in range(occlude_start_row, height):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        probs = tf.nn.softmax(logits)
-        next_sample = probs[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
 
 fig = plt.figure(figsize=(10, 10))
 for x in range(1, 10):
