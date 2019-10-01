@@ -3,8 +3,38 @@ from tensorflow import keras
 
 def concat_elu(x):
     """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
-    axis = len(x.get_shape()) - 1
+    axis = len(x.shape) - 1
     return tf.nn.elu(tf.concat([x, -x], axis))
+
+def int_shape(x):
+    return list(map(int, x.shape))
+
+def down_shift(x, step=1):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0], step, xs[2], xs[3]]), x[:, :xs[1] - step, :, :]], 1)
+
+
+def right_shift(x, step=1):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0], xs[1], step, xs[3]]), x[:, :, :xs[2] - step, :]], 2)
+
+
+def down_right_shifted_conv2d(x, num_filters, filter_size=[2, 2], stride=[1, 1], **kwargs):
+    x = tf.pad(x, [[0, 0], [filter_size[0] - 1, 0],
+                   [filter_size[1] - 1, 0], [0, 0]])
+    return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+
+
+
+def down_shifted_conv2d(x, num_filters, filter_size=[2, 3], stride=[1, 1], **kwargs):
+    x = tf.pad(x, [[0, 0], [filter_size[0] - 1, 0],
+                   [int((filter_size[1] - 1) / 2), int((filter_size[1] - 1) / 2)], [0, 0]])
+    return conv2d(x, num_filters, filter_size=filter_size, pad='VALID', stride=stride, **kwargs)
+
+
+
+
+
 
 
 @add_arg_scope

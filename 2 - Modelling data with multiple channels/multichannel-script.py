@@ -231,7 +231,7 @@ print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-samples = (np.random.rand(9, height, width, n_channel) * 0.01).astype('float32')
+samples = np.zeros((9, height, width, n_channel), dtype='float32')
 for i in range(height):
     for j in range(width):
         for k in range(n_channel):
@@ -244,10 +244,9 @@ for i in range(height):
             samples[:, i, j, k] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for x in range(1, 3):
-    for y in range(1, 3):
-        ax = fig.add_subplot(3, 3, 3 * y + x)
-        ax.imshow(samples[3 * y + x, :, :, :])
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i+1)
+    ax.imshow(samples[i, :, :, :])
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()

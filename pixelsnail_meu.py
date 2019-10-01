@@ -4,6 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 # Borrowed from https://github.com/neocxi/pixelsnail-public and ported it to PyTorch
+import tensorflow as tf
+import tensorflow_addons as tfa
 
 from math import sqrt
 from functools import partial, lru_cache
@@ -12,6 +14,289 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+
+class PixelSNAIL(tf.keras.Model):
+    def __init__(self,
+                 shape,
+                 n_class,
+                 channel,
+                 kernel_size,
+                 n_block,
+                 n_res_block,
+                 res_channel,
+                 attention=True,
+                 dropout=0.1,
+                 n_cond_res_block=0,
+                 cond_res_channel=0,
+                 cond_res_kernel=3,
+                 n_out_res_block=0):
+        super(PixelSNAIL, self).__init__()
+
+        height, width = shape
+
+        self.n_class = n_class
+
+        if kernel_size % 2 == 0:
+            kernel = kernel_size + 1
+        else:
+            kernel = kernel_size
+
+        self.horizontal = CausalConv2d(n_class, channel, [kernel // 2, kernel], padding='down')
+        self.vertical = CausalConv2d(n_class, channel, [(kernel + 1) // 2, kernel // 2], padding='downright')
+
+        coord_x = (tf.range(height, dtype=tf.float32) - height / 2) / height
+        coord_x = tf.reshape(coord_x, (1, height, 1, 1))
+        coord_x = tf.broadcast_to(coord_x, (1, height, width, 1))
+
+        coord_y = (tf.range(width, dtype=tf.float32) - width / 2) / width
+        coord_y = tf.reshape(coord_y, (1, 1, width, 1))
+        coord_y = tf.broadcast_to(coord_y, (1, height, width, 1))
+
+        # self.register_buffer('background', torch.cat([coord_x, coord_y], 1))
+        # self.register_buffer = tf.concat([coord_x, coord_y], -1)
+
+
+    def __call__(self, x):
+        pass
+
+
+
+
+
+class PixelSNAIL(nn.Module):
+    def __init__(
+            self,
+            shape,
+            n_class,
+            channel,
+            kernel_size,
+            n_block,
+            n_res_block,
+            res_channel,
+            attention=True,
+            dropout=0.1,
+            n_cond_res_block=0,
+            cond_res_channel=0,
+            cond_res_kernel=3,
+            n_out_res_block=0,
+    ):
+        super().__init__()
+
+        height, width = shape
+
+        self.n_class = n_class
+
+        if kernel_size % 2 == 0:
+            kernel = kernel_size + 1
+
+        else:
+            kernel = kernel_size
+
+        self.horizontal = CausalConv2d(
+            n_class, channel, [kernel // 2, kernel], padding='down'
+        )
+        self.vertical = CausalConv2d(
+            n_class, channel, [(kernel + 1) // 2, kernel // 2], padding='downright'
+        )
+
+        coord_x = (torch.arange(height).float() - height / 2) / height
+        coord_x = coord_x.view(1, 1, height, 1).expand(1, 1, height, width)
+        coord_y = (torch.arange(width).float() - width / 2) / width
+        coord_y = coord_y.view(1, 1, 1, width).expand(1, 1, height, width)
+        self.register_buffer('background', torch.cat([coord_x, coord_y], 1))
+
+        self.blocks = []
+
+        for i in range(n_block):
+            self.blocks.append(
+                PixelBlock(
+                    channel,
+                    res_channel,
+                    kernel_size,
+                    n_res_block,
+                    attention=attention,
+                    dropout=dropout,
+                    condition_dim=cond_res_channel,
+                )
+            )
+
+        if n_cond_res_block > 0:
+            self.cond_resnet = CondResNet(
+                n_class, cond_res_channel, cond_res_kernel, n_cond_res_block
+            )
+
+        out = []
+
+        for i in range(n_out_res_block):
+            out.append(GatedResBlock(channel, res_channel, 1))
+
+        out.extend([nn.ELU(inplace=True), WNConv2d(channel, n_class, 1)])
+
+        self.out = nn.Sequential(*out)
+
+    def forward(self, input, condition=None, cache=None):
+        if cache is None:
+            cache = {}
+        batch, height, width = input.shape
+        input = (
+            F.one_hot(input, self.n_class).permute(0, 3, 1, 2).type_as(self.background)
+        )
+        horizontal = shift_down(self.horizontal(input))
+        vertical = shift_right(self.vertical(input))
+        out = horizontal + vertical
+
+        background = self.background[:, :, :height, :].expand(batch, 2, height, width)
+
+        if condition is not None:
+            if 'condition' in cache:
+                condition = cache['condition']
+                condition = condition[:, :, :height, :]
+
+            else:
+                condition = (
+                    F.one_hot(condition, self.n_class)
+                        .permute(0, 3, 1, 2)
+                        .type_as(self.background)
+                )
+                condition = self.cond_resnet(condition)
+                condition = F.interpolate(condition, scale_factor=2)
+                cache['condition'] = condition.detach().clone()
+                condition = condition[:, :, :height, :]
+
+        for block in self.blocks:
+            out = block(out, background, condition=condition)
+
+        out = self.out(out)
+
+        return out, cache
+
+
+
+
+
+def int_shape(x):
+    return list(map(int, x.shape))
+
+def down_shift(x, step=1):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0], step, xs[2], xs[3]]), x[:, :xs[1] - step, :, :]], 1)
+
+
+def right_shift(x, step=1):
+    xs = int_shape(x)
+    return tf.concat([tf.zeros([xs[0], xs[1], step, xs[3]]), x[:, :, :xs[2] - step, :]], 2)
+
+
+class CausalConv2d(nn.Module):
+    def __init__(
+            self,
+            in_channel,
+            out_channel,
+            kernel_size,
+            stride=1,
+            padding='downright',
+            activation=None,
+    ):
+        super().__init__()
+
+        if isinstance(kernel_size, int):
+            kernel_size = [kernel_size] * 2
+
+        self.kernel_size = kernel_size
+
+        if padding == 'downright':
+            pad = [kernel_size[1] - 1, 0, kernel_size[0] - 1, 0]
+
+        elif padding == 'down' or padding == 'causal':
+            pad = kernel_size[1] // 2
+
+            pad = [pad, pad, kernel_size[0] - 1, 0]
+
+        self.causal = 0
+        if padding == 'causal':
+            self.causal = kernel_size[1] // 2
+
+        self.pad = nn.ZeroPad2d(pad)
+
+        self.conv = WNConv2d(
+            in_channel,
+            out_channel,
+            kernel_size,
+            stride=stride,
+            padding=0,
+            activation=activation,
+        )
+
+    def forward(self, input):
+        out = self.pad(input)
+
+        if self.causal > 0:
+            self.conv.conv.weight_v.data[:, :, -1, self.causal:].zero_()
+
+        out = self.conv(out)
+
+        return out
+
+
+# TODO: gated linear unit
+
+class GatedResBlock(tf.keras.Model):
+    def __init__(self,
+                 in_channel,
+                 channel,
+                 kernel_size,
+                 conv='wnconv2d',
+                 activation=nn.ELU,
+                 dropout=0.1,
+                 auxiliary_channel=0,
+                 condition_dim=0):
+        super(GatedResBlock, self).__init__()
+
+        if conv == 'wnconv2d':
+            conv_module = partial(tfa.layers.WeightNormalization(tf.keras.layers.Conv2D(padding='same')))
+        elif conv == 'causal_downright':
+            conv_module = partial(CausalConv2d, padding='downright')
+
+        elif conv == 'causal':
+            conv_module = partial(CausalConv2d, padding='causal')
+
+        self.activation = activation(inplace=True)
+        self.conv1 = conv_module(in_channel, channel, kernel_size)
+
+        if auxiliary_channel > 0:
+            self.aux_conv = WNConv2d(auxiliary_channel, channel, 1)
+
+        self.dropout = nn.Dropout(dropout)
+
+        self.conv2 = conv_module(channel, in_channel * 2, kernel_size)
+
+        if condition_dim > 0:
+            # self.condition = nn.Linear(condition_dim, in_channel * 2, bias=False)
+            self.condition = WNConv2d(condition_dim, in_channel * 2, 1, bias=False)
+        self.gate = nn.GLU(1)
+
+    def __call__(self, x, aux_input=None, condition=None):
+        out = self.conv1(self.activation(input))
+
+        if aux_input is not None:
+            out = out + self.aux_conv(self.activation(aux_input))
+
+        out = self.activation(out)
+        out = self.dropout(out)
+        out = self.conv2(out)
+
+        if condition is not None:
+            condition = self.condition(condition)
+            out += condition
+            # out = out + condition.view(condition.shape[0], 1, 1, condition.shape[1])
+
+        out = self.gate(out)
+        out += input
+
+        return out
+
+
 
 
 def wn_linear(in_dim, out_dim):
@@ -59,34 +344,6 @@ class WNConv2d(nn.Module):
 
         return out
 
-
-
-
-
-def int_shape(x):
-    return list(map(int, x.shape))
-
-def down_shift(x, step=1):
-    xs = int_shape(x)
-    return tf.concat([tf.zeros([xs[0], step, xs[2], xs[3]]), x[:, :xs[1] - step, :, :]], 1)
-
-
-def right_shift(x, step=1):
-    xs = int_shape(x)
-    return tf.concat([tf.zeros([xs[0], xs[1], step, xs[3]]), x[:, :, :xs[2] - step, :]], 2)
-
-
-
-
-
-
-
-def shift_down(input, size=1):
-    return F.pad(input, [0, 0, size, 0])[:, :, : input.shape[2], :]
-
-
-def shift_right(input, size=1):
-    return F.pad(input, [size, 0, 0, 0])[:, :, :, : input.shape[3]]
 
 
 class CausalConv2d(nn.Module):

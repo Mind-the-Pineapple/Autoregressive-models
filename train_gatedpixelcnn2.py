@@ -1,7 +1,4 @@
 """
-https://github.com/igul222/pixel_rnn/blob/master/pixel_rnn.py
-https://github.com/rampage644/wavenet/blob/master/wavenet/models.py
-https://github.com/jakebelew/gated-pixel-cnn/blob/master/network.py
 """
 import random as rn
 import time
@@ -66,9 +63,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
             mask[kernel_h // 2, kernel_w // 2 + (self.mask_type == 'B'):, :, :] = 0.
             mask[kernel_h // 2 + 1:, :, :] = 0.
 
-        self.mask = tf.constant(mask,
-                                dtype=tf.float32,
-                                name='mask')
+        self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
 
     def call(self, input):
         masked_kernel = tf.math.multiply(self.mask, self.kernel)
@@ -95,7 +90,9 @@ class GatedBlock(tf.keras.Model):
         return tf.nn.tanh(tanh_preactivation) * tf.nn.sigmoid(sigmoid_preactivation)
 
     def call(self, input_tensor):
-        v, h = tf.split(input_tensor, 2, axis=-1)
+        v = input_tensor[0]
+        h = input_tensor[1]
+
         horizontal_preactivation = self.horizontal_conv(h)  # 1xN
         vertical_preactivation = self.vertical_conv(v)  # NxN
         v_to_h = self.v_to_h_conv(vertical_preactivation)  # 1x1
@@ -103,32 +100,20 @@ class GatedBlock(tf.keras.Model):
 
         horizontal_preactivation = horizontal_preactivation + v_to_h
         h_activated = self._gate(horizontal_preactivation)
+        h_activated = self.horizontal_output(h_activated)
 
-        if self.mask_type =='B':
-            h_activated = self.horizontal_output(h_activated)
-            h_activated = h + h_activated
+        if self.mask_type == 'A':
+            h_out = h_activated
+        elif self.mask_type == 'B':
+            h_out = h + h_activated
 
-        output = tf.concat((v_out, h_activated), axis=-1)
-        return output
-    #
-    # # 1 by 1 convolution on horizontal stack
-    # h_conv2 = self.horizontal_conv_2(h_conv_activation)
-    # if self.restricted:
-    #     h_out = h_conv2
-    # else:
-    #     h_out = h_conv2 + h_input
-    # return v_out, h_out
+        return v_out, h_out
+
 
 
 def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
-
-
-def sample_from(distribution):
-    """Sample random values from distribution"""
-    batch_size, bins = distribution.shape
-    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
 
 
 # def main():
@@ -179,19 +164,16 @@ test_dataset = test_dataset.batch(batch_size)
 # https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
 
 inputs = keras.layers.Input(shape=(height, width, n_channel))
-x = keras.layers.Concatenate()([inputs, inputs])
-x = GatedBlock(mask_type='A', filters=64, kernel_size=3)(x)
+v, h = GatedBlock(mask_type='A', filters=64, kernel_size=3)([inputs, inputs])
 
 for i in range(7):
-    x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)
-
-v, h = tf.split(x, 2, axis=-1)
+    v, h = GatedBlock(mask_type='B', filters=64, kernel_size=3)([v, h])
 
 x = keras.layers.Activation(activation='relu')(h)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 
 x = keras.layers.Activation(activation='relu')(x)
-x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
+x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)
 
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
@@ -206,12 +188,12 @@ compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
 # --------------------------------------------------------------------------------------------------------------
 @tf.function
-def train_step(batch_x, batch_y, batch_label):
+def train_step(batch_x, batch_y):
     with tf.GradientTape() as ae_tape:
         logits = pixelcnn(batch_x, training=True)
 
-        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
-        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
 
         loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
 
@@ -260,23 +242,21 @@ print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
+samples = np.zeros((100, height, width, n_channel), dtype='float32')
 for i in range(height):
     for j in range(width):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        probs = tf.nn.softmax(logits)
-        next_sample = probs[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
 
 fig = plt.figure(figsize=(10, 10))
-for x in range(1, 10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+for i in range(100):
+    ax = fig.add_subplot(10, 10, i+1)
+    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()
 
 # --------------------------------------------------------------------------------------------------------------
@@ -297,10 +277,9 @@ for i in range(occlude_start_row, height):
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for x in range(1, 10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+for i in range(100):
+    ax = fig.add_subplot(10, 10, i+1)
+    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()

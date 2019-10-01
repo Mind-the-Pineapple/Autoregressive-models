@@ -1,4 +1,6 @@
-"""Script to train pixelCNN on the MNIST dataset."""
+"""
+
+"""
 import random as rn
 import time
 
@@ -25,20 +27,26 @@ class MaskedConv2D(tf.keras.layers.Layer):
                  bias_initializer='zeros'):
         super(MaskedConv2D, self).__init__()
 
-        assert mask_type in {'A', 'B'}
+        assert mask_type in {'A', 'B', 'V'}
         self.mask_type = mask_type
 
         self.filters = filters
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size)
         self.kernel_size = kernel_size
+
         self.strides = strides
         self.padding = padding.upper()
         self.kernel_initializer = keras.initializers.get(kernel_initializer)
         self.bias_initializer = keras.initializers.get(bias_initializer)
 
     def build(self, input_shape):
+        kernel_h, kernel_w = self.kernel_size
+
         self.kernel = self.add_weight("kernel",
-                                      shape=(self.kernel_size,
-                                             self.kernel_size,
+                                      shape=(kernel_h,
+                                             kernel_w,
                                              int(input_shape[-1]),
                                              self.filters),
                                       initializer=self.kernel_initializer,
@@ -50,10 +58,15 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                     trainable=True)
 
         mask = np.ones(self.kernel.shape, dtype=np.float32)
-        mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
-        mask[self.kernel_size // 2 + 1:, :, :] = 0.
+        if self.mask_type == 'V':
+            mask[kernel_h // 2:, :, :, :] = 0.
+        else:
+            mask[kernel_h // 2, kernel_w // 2 + (self.mask_type == 'B'):, :, :] = 0.
+            mask[kernel_h // 2 + 1:, :, :] = 0.
 
-        self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
+        self.mask = tf.constant(mask,
+                                dtype=tf.float32,
+                                name='mask')
 
     def call(self, input):
         masked_kernel = tf.math.multiply(self.mask, self.kernel)
@@ -62,36 +75,38 @@ class MaskedConv2D(tf.keras.layers.Layer):
         return x
 
 
-class ResidualBlock(tf.keras.Model):
-    """Residual blocks that compose pixelCNN
+class GatedBlock(tf.keras.Model):
+    """"""
 
-    Blocks of layers with 3 convolutional layers and one residual connection.
-    Based on Figure 5 from [1] where h indicates number of filters.
+    def __init__(self, mask_type, filters, kernel_size):
+        super(GatedBlock, self).__init__(name='')
 
-    Refs:
-    [1] - Oord, A. V. D., Kalchbrenner, N., & Kavukcuoglu, K. (2016). Pixel
-     recurrent neural networks. arXiv preprint arXiv:1601.06759.
-    """
+        self.vertical_conv = MaskedConv2D(mask_type='V', filters=2 * filters, kernel_size=kernel_size)
+        self.horizontal_conv = MaskedConv2D(mask_type=mask_type, filters=2 * filters, kernel_size=(1, kernel_size))
+        self.v_to_h_conv = keras.layers.Conv2D(filters=2 * filters, kernel_size=1)
 
-    def __init__(self, h):
-        super(ResidualBlock, self).__init__(name='')
+        self.horizontal_output = keras.layers.Conv2D(filters=filters, kernel_size=1)
 
-        self.conv2a = keras.layers.Conv2D(filters=h, kernel_size=1, strides=1)
-        self.conv2b = MaskedConv2D(mask_type='B', filters=h, kernel_size=3, strides=1)
-        self.conv2c = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
+    def _gate(self, x):
+        tanh_preactivation, sigmoid_preactivation = tf.split(x, 2, axis=-1)
+        return tf.nn.tanh(tanh_preactivation) * tf.nn.sigmoid(sigmoid_preactivation)
 
     def call(self, input_tensor):
-        x = tf.nn.relu(input_tensor)
-        x = self.conv2a(x)
+        v, h = tf.split(input_tensor, 2, axis=-1)
+        horizontal_preactivation = self.horizontal_conv(h)  # 1xN
+        vertical_preactivation = self.vertical_conv(v)  # NxN
+        v_to_h = self.v_to_h_conv(vertical_preactivation)  # 1x1
+        v_out = self._gate(vertical_preactivation)
 
-        x = tf.nn.relu(x)
-        x = self.conv2b(x)
+        horizontal_preactivation = horizontal_preactivation + v_to_h
+        h_activated = self._gate(horizontal_preactivation)
 
-        x = tf.nn.relu(x)
-        x = self.conv2c(x)
+        h_preres = self.horizontal_output(h_activated)
 
-        x += input_tensor
-        return x
+        h_out = h + h_preres
+
+        output = tf.concat((v_out, h_out), axis=-1)
+        return output
 
 
 def quantise(images, q_levels):
@@ -99,9 +114,13 @@ def quantise(images, q_levels):
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
 
+def sample_from(distribution):
+    """Sample random values from distribution"""
+    batch_size, bins = distribution.shape
+    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
+
+
 # def main():
-
-
 # --------------------------------------------------------------------------------------------------------------
 # Defining random seeds
 random_seed = 42
@@ -120,8 +139,8 @@ n_channel = 1
 x_train = x_train.astype('float32') / 255.
 x_test = x_test.astype('float32') / 255.
 
-x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
-x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
+x_train = x_train.reshape(x_train.shape[0], height, width, 1)
+x_test = x_test.reshape(x_test.shape[0], height, width, 1)
 
 # --------------------------------------------------------------------------------------------------------------
 # Quantise the input data in q levels
@@ -145,14 +164,23 @@ test_dataset = test_dataset.batch(batch_size)
 
 # --------------------------------------------------------------------------------------------------------------
 # Create PixelCNN model
+# https://github.com/RishabGoel/PixelCNN/blob/master/pixel_cnn.py
+# https://github.com/jonathanventura/pixelcnn/blob/master/pixelcnn.py
+
 inputs = keras.layers.Input(shape=(height, width, n_channel))
+# x = keras.layers.Concatenate()([inputs, inputs])
+# x = GatedBlock(mask_type='A', filters=64, kernel_size=7)(x)
 x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
 
-for i in range(15):
-    x = ResidualBlock(h=64)(x)
 
-x = keras.layers.Activation(activation='relu')(x)
+for i in range(7):
+    x = GatedBlock(mask_type='B', filters=64, kernel_size=3)(x)
+
+v, h = tf.split(x, 2, axis=-1)
+
+x = keras.layers.Activation(activation='relu')(h)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
+
 x = keras.layers.Activation(activation='relu')(x)
 x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
@@ -205,6 +233,7 @@ for epoch in range(n_epochs):
     print('EPOCH {:3d}: TIME: {:.2f} ETA: {:.2f}'.format(epoch,
                                                          epoch_time,
                                                          epoch_time * (n_epochs - epoch)))
+
 # --------------------------------------------------------------------------------------------------------------
 # Test
 test_loss = []
@@ -222,21 +251,23 @@ print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-samples = np.zeros((100, height, width, n_channel), dtype='float32')
-for i in range(height):
-    for j in range(width):
+samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
+for i in range(28):
+    for j in range(28):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
-        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
+        probs = tf.nn.softmax(logits)
+        next_sample = probs[:, i, j, 0, :]
+        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for i in range(100):
-    ax = fig.add_subplot(10, 10, i+1)
-    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
-    plt.xticks(np.array([]))
-    plt.yticks(np.array([]))
+for x in range(1, 10):
+    for y in range(1, 10):
+        ax = fig.add_subplot(10, 10, 10 * y + x)
+        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
+        plt.xticks(np.array([]))
+        plt.yticks(np.array([]))
 plt.show()
 
 # --------------------------------------------------------------------------------------------------------------
@@ -252,13 +283,15 @@ for i in range(occlude_start_row, height):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
-        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
+        probs = tf.nn.softmax(logits)
+        next_sample = probs[:, i, j, 0, :]
+        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for i in range(100):
-    ax = fig.add_subplot(10, 10, i+1)
-    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
-    plt.xticks(np.array([]))
-    plt.yticks(np.array([]))
+for x in range(1, 10):
+    for y in range(1, 10):
+        ax = fig.add_subplot(10, 10, 10 * y + x)
+        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
+        plt.xticks(np.array([]))
+        plt.yticks(np.array([]))
 plt.show()

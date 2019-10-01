@@ -241,7 +241,7 @@ for epoch in range(n_epochs):
                                                          epoch_time * (n_epochs - epoch)))
 
 
-samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
+samples = np.zeros((100, height, width, n_channel), dtype='float32')
 samples_labels = (np.ones((100, 1)) * 7).astype('int32')
 for i in range(height):
     for j in range(width):

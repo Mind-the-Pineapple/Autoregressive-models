@@ -213,7 +213,7 @@ print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-samples = (np.random.rand(100, height, width, n_channel) * 0.01).astype('float32')
+samples = np.zeros((100, height, width, n_channel), dtype='float32')
 for i in range(28):
     for j in range(28):
         logits = pixelcnn(samples)
@@ -224,12 +224,11 @@ for i in range(28):
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for x in range(1, 10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+for i in range(100):
+    ax = fig.add_subplot(10, 10, i+1)
+    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()
 
 
@@ -251,12 +250,11 @@ for i in range(occlude_start_row, height):
         samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
-for x in range(1, 10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x, :, :, 0], cmap=matplotlib.cm.binary)
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+for i in range(100):
+    ax = fig.add_subplot(10, 10, i+1)
+    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()
 
 
