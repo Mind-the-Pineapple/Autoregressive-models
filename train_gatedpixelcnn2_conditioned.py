@@ -93,7 +93,7 @@ class GatedBlock(tf.keras.Model):
     def _gate(self, x):
         tanh_preactivation, sigmoid_preactivation = tf.split(x, 2, axis=-1)
         return tf.nn.tanh(tanh_preactivation) * tf.nn.sigmoid(sigmoid_preactivation)
-    # TODO: Usar lista ao inves de concat input e outputs
+
     def call(self, input_tensor):
         v = input_tensor[0]
         h = input_tensor[1]
@@ -125,12 +125,6 @@ def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
-
-def sample_from(distribution):
-    """Sample random values from distribution"""
-    batch_size, bins = distribution.shape
-    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
-
 # def main():
 # --------------------------------------------------------------------------------------------------------------
 # Defining random seeds
@@ -150,8 +144,8 @@ n_channel = 1
 x_train = x_train.astype('float32') / 255.
 x_test = x_test.astype('float32') / 255.
 
-x_train = x_train.reshape(x_train.shape[0], height, width, 1)
-x_test = x_test.reshape(x_test.shape[0], height, width, 1)
+x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
+x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -245,20 +239,17 @@ samples = np.zeros((100, height, width, n_channel), dtype='float32')
 samples_labels = (np.ones((100, 1)) * 7).astype('int32')
 for i in range(height):
     for j in range(width):
-        A = pixelcnn([samples, samples_labels])
-        A = tf.reshape(A, [-1, height, width, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
-        A = tf.transpose(A, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
-        B = tf.nn.softmax(A)
-        next_sample = B[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
-        print("{} {}: {}".format(i, j, sample_from(next_sample.numpy())[0]))
+        logits = pixelcnn([samples, samples_labels])
+        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
 
-fig = plt.figure()
-for x in range(1,10):
-    for y in range(1, 10):
-        ax = fig.add_subplot(10, 10, 10 * y + x)
-        ax.matshow(samples[10 * y + x,:,:,0], cmap=matplotlib.cm.binary)
-        plt.xticks(np.array([]))
-        plt.yticks(np.array([]))
+fig = plt.figure(figsize=(10, 10))
+for i in range(100):
+    ax = fig.add_subplot(10, 10, i + 1)
+    ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
 plt.show()
