@@ -2,7 +2,6 @@
 import random as rn
 import time
 
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
@@ -238,10 +237,9 @@ for i in range(height):
             logits = pixelcnn(samples)
             logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
             logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-            probs = tf.nn.softmax(logits)
+            next_sample = tf.random.categorical(logits[:, i, j, n_channel, :], 1)
+            samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
-            next_sample = probs[:, i, j, k, :]
-            samples[:, i, j, k] = sample_from(next_sample.numpy()) / (q_levels - 1)
 
 fig = plt.figure(figsize=(10, 10))
 for i in range(9):
