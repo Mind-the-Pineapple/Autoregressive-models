@@ -1,2 +1,5 @@
 # IDE Files
 .idea
+
+# Jupyter Notebook
+.ipynb_checkpoints
