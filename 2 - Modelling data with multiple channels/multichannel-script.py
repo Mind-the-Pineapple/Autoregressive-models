@@ -237,8 +237,8 @@ for i in range(height):
             logits = pixelcnn(samples)
             logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
             logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-            next_sample = tf.random.categorical(logits[:, i, j, n_channel, :], 1)
-            samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
+            next_sample = tf.random.categorical(logits[:, i, j, k, :], 1)
+            samples[:, i, j, k] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
 
 fig = plt.figure(figsize=(10, 10))
