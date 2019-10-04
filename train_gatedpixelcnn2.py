@@ -249,11 +249,11 @@ for i in range(height):
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
         next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
-        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:,0]
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
 fig = plt.figure(figsize=(10, 10))
 for i in range(100):
-    ax = fig.add_subplot(10, 10, i+1)
+    ax = fig.add_subplot(10, 10, i + 1)
     ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
     plt.xticks(np.array([]))
     plt.yticks(np.array([]))
@@ -272,13 +272,12 @@ for i in range(occlude_start_row, height):
         logits = pixelcnn(samples)
         logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
         logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-        probs = tf.nn.softmax(logits)
-        next_sample = probs[:, i, j, 0, :]
-        samples[:, i, j, 0] = sample_from(next_sample.numpy()) / (q_levels - 1)
+        next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+        samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
 fig = plt.figure(figsize=(10, 10))
 for i in range(100):
-    ax = fig.add_subplot(10, 10, i+1)
+    ax = fig.add_subplot(10, 10, i + 1)
     ax.matshow(samples[i, :, :, 0], cmap=matplotlib.cm.binary)
     plt.xticks(np.array([]))
     plt.yticks(np.array([]))
