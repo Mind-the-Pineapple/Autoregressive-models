@@ -1,2 +1,2 @@
-tensorflow-gpu==2.0.0-beta1
+tensorflow-gpu==2.0.0
 matplotlib
