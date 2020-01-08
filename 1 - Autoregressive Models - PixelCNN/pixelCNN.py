@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras.utils import Progbar
 
 
 class MaskedConv2D(tf.keras.layers.Layer):
@@ -49,9 +50,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                     initializer=self.bias_initializer,
                                     trainable=True)
 
+        center = self.kernel_size // 2
+
         mask = np.ones(self.kernel.shape, dtype=np.float32)
-        mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
-        mask[self.kernel_size // 2 + 1:, :, :] = 0.
+        mask[center, center + (self.mask_type == 'B'):, :, :] = 0.
+        mask[center + 1:, :, :, :] = 0.
 
         self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
 
@@ -123,7 +126,7 @@ def main():
 
     # --------------------------------------------------------------------------------------------------------------
     # Quantise the input data in q levels
-    q_levels = 256
+    q_levels = 4
     x_train_quantised = quantise(x_train, q_levels)
     x_test_quantised = quantise(x_test, q_levels)
 
@@ -152,14 +155,14 @@ def main():
     x = keras.layers.Activation(activation='relu')(x)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
+    x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
-
     # --------------------------------------------------------------------------------------------------------------
     # Prepare optimizer and loss function
-    lr_decay = 0.9995
-    learning_rate = 1e-3
+    lr_decay = 0.99995
+    learning_rate = 1e-2
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
     compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
@@ -183,24 +186,18 @@ def main():
 
     # --------------------------------------------------------------------------------------------------------------
     # Training loop
-    n_epochs = 30
+    n_epochs = 150
     n_iter = int(np.ceil(x_train_quantised.shape[0] / batch_size))
     for epoch in range(n_epochs):
-        start_epoch = time.time()
+        progbar = Progbar(n_iter)
+        print('Epoch {:}/{:}'.format(epoch + 1, n_epochs))
+
         for i_iter, (batch_x, batch_y) in enumerate(train_dataset):
             start = time.time()
             optimizer.lr = optimizer.lr * lr_decay
             loss = train_step(batch_x, batch_y)
-            iter_time = time.time() - start
-            if i_iter % 100 == 0:
-                print('EPOCH {:3d}: ITER {:4d}/{:4d} TIME: {:.2f} LOSS: {:.4f}'.format(epoch,
-                                                                                       i_iter, n_iter,
-                                                                                       iter_time,
-                                                                                       loss))
-        epoch_time = time.time() - start_epoch
-        print('EPOCH {:3d}: TIME: {:.2f} ETA: {:.2f}'.format(epoch,
-                                                             epoch_time,
-                                                             epoch_time * (n_epochs - epoch)))
+
+            progbar.add(1, values=[("loss", loss)])
     # --------------------------------------------------------------------------------------------------------------
     # Test
     test_loss = []
