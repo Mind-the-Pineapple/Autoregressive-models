@@ -1,4 +1,4 @@
-"""Script to train pixelCNN on the CIFAR10 dataset."""
+"""Script to train pixelCNN on multichannel data."""
 import random as rn
 import time
 
@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras.utils import Progbar
 
 
 class MaskedConv2D(tf.keras.layers.Layer):
@@ -48,13 +49,33 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                     initializer=self.bias_initializer,
                                     trainable=True)
 
-        mask = np.ones(self.kernel.shape, dtype=np.float32)
-        mask[self.kernel_size // 2, self.kernel_size // 2 + (self.mask_type == 'B'):, :, :] = 0.
-        mask[self.kernel_size // 2 + 1:, :, :] = 0.
+        center = self.kernel_size // 2
 
-        self.mask = tf.constant(mask,
-                                dtype=tf.float32,
-                                name='mask')
+        mask = np.ones(self.kernel.shape, dtype=np.float32)
+        mask[center, center + 1:, :, :] = 0.
+        mask[center + 1:, :, :, :] = 0.
+
+        # if self.mask_type == 'A':
+        #     mask[center, center, :, :int(self.filters / 3)] = 0.
+        #     mask[center, center, 1:, int(self.filters / 3):2 * int(self.filters / 3)] = 0.
+        #     mask[center, center, 2:, 2 * int(self.filters / 3):] = 0.
+        # else:
+        #     mask[center, center, int(int(input_shape[-1]) / 3):, :int(self.filters / 3)] = 0.
+        #     mask[center, center, 2 * int(int(input_shape[-1]) / 3):,
+        #     int(self.filters / 3):2 * int(self.filters / 3)] = 0.
+        #
+
+        for i in range(3):
+            for j in range(3):
+                if (self.mask_type == 'A' and i >= j) or (self.mask_type == 'B' and i > j):
+                    mask[
+                    center,
+                    center,
+                    i::3,
+                    j::3
+                    ] = 0.
+
+        self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
 
     def call(self, input):
         masked_kernel = tf.math.multiply(self.mask, self.kernel)
@@ -96,19 +117,13 @@ class ResidualBlock(tf.keras.Model):
         return x
 
 
-def quantisize(images, q_levels):
-    """Digitize image into q levels"""
+def quantise(images, q_levels):
+    """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
 
-def sample_from(distribution):
-    """"""
-    batch_size, bins = distribution.shape
-    return np.array([np.random.choice(bins, p=distr) for distr in distribution])
-
 
 # def main():
-
 # --------------------------------------------------------------------------------------------------------------
 # Defining random seeds
 random_seed = 42
@@ -131,15 +146,15 @@ x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
 x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
 
 # --------------------------------------------------------------------------------------------------------------
-# Quantisize the input data in q levels
-q_levels = 128
-x_train_quantised = quantisize(x_train, q_levels)
-x_test_quantised = quantisize(x_test, q_levels)
+# Quantise the input data in q levels
+q_levels = 64
+x_train_quantised = quantise(x_train, q_levels)
+x_test_quantised = quantise(x_test, q_levels)
 
 # --------------------------------------------------------------------------------------------------------------
 # Creating input stream using tf.data API
-batch_size = 128
-train_buf = 60000
+batch_size = 256
+train_buf = 20000
 
 train_dataset = tf.data.Dataset.from_tensor_slices((x_train_quantised / (q_levels - 1),
                                                     x_train_quantised.astype('int32')))
@@ -161,19 +176,18 @@ for i in range(15):
 x = keras.layers.Activation(activation='relu')(x)
 x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Activation(activation='relu')(x)
+x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
 x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
 
 pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
 
-
 # --------------------------------------------------------------------------------------------------------------
 # Prepare optimizer and loss function
-lr_decay = 0.9995
-learning_rate = 1e-3
+lr_decay = 0.99995
+learning_rate = 1e-2
 optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
 compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-
 
 # --------------------------------------------------------------------------------------------------------------
 @tf.function
@@ -194,43 +208,37 @@ def train_step(batch_x, batch_y):
 
 # --------------------------------------------------------------------------------------------------------------
 # Training loop
-n_epochs = 30
+n_epochs = 150
 n_iter = int(np.ceil(x_train_quantised.shape[0] / batch_size))
 for epoch in range(n_epochs):
-    start_epoch = time.time()
+    progbar = Progbar(n_iter)
+    print('Epoch {:}/{:}'.format(epoch + 1, n_epochs))
+
     for i_iter, (batch_x, batch_y) in enumerate(train_dataset):
         start = time.time()
         optimizer.lr = optimizer.lr * lr_decay
         loss = train_step(batch_x, batch_y)
-        iter_time = time.time() - start
-        if i_iter % 100 == 0:
-            print('EPOCH {:3d}: ITER {:4d}/{:4d} TIME: {:.2f} LOSS: {:.4f}'.format(epoch,
-                                                                                   i_iter, n_iter,
-                                                                                   iter_time,
-                                                                                   loss))
-    epoch_time = time.time() - start_epoch
-    print('EPOCH {:3d}: TIME: {:.2f} ETA: {:.2f}'.format(epoch,
-                                                         epoch_time,
-                                                         epoch_time * (n_epochs - epoch)))
-# --------------------------------------------------------------------------------------------------------------
-# Test
-test_loss = []
-for batch_x, batch_y in test_dataset:
-    logits = pixelcnn(batch_x, training=False)
-    logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
-    logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
 
-    # Calculate cross-entropy (= negative log-likelihood)
-    loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
-
-    test_loss.append(loss)
-print('nll : {:} nats'.format(np.array(test_loss).mean()))
-print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
-
+        progbar.add(1, values=[("loss", loss)])
+# # --------------------------------------------------------------------------------------------------------------
+# # Test
+# test_loss = []
+# for batch_x, batch_y in test_dataset:
+#     logits = pixelcnn(batch_x, training=False)
+#     logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+#     logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
+#
+#     # Calculate cross-entropy (= negative log-likelihood)
+#     loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
+#
+#     test_loss.append(loss)
+# print('nll : {:} nats'.format(np.array(test_loss).mean()))
+# print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
 
 # --------------------------------------------------------------------------------------------------------------
 # Generating new images
-samples = np.zeros((9, height, width, n_channel), dtype='float32')
+samples = np.zeros((10, height, width, n_channel)) + 0.5 * np.random.rand(10, height, width, n_channel)
+
 for i in range(height):
     for j in range(width):
         for k in range(n_channel):
@@ -240,10 +248,34 @@ for i in range(height):
             next_sample = tf.random.categorical(logits[:, i, j, k, :], 1)
             samples[:, i, j, k] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
+fig = plt.figure(figsize=(10, 10))
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i + 1)
+    ax.imshow(samples[i, :, :, :])
+    plt.xticks(np.array([]))
+    plt.yticks(np.array([]))
+plt.show()
+
+# --------------------------------------------------------------------------------------------------------------
+# Generating new images
+occlude_start_row = 14
+num_generated_images = 1
+samples = np.copy(x_train_quantised[:10, :, :, :])
+samples = samples / (q_levels - 1)
+samples[:, occlude_start_row:, :, :] = 0
+
+for i in range(occlude_start_row, height):
+    for j in range(width):
+        for k in range(n_channel):
+            logits = pixelcnn(samples)
+            logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
+            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
+            next_sample = tf.random.categorical(logits[:, i, j, k, :], 1)
+            samples[:, i, j, k] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
 fig = plt.figure(figsize=(10, 10))
 for i in range(9):
-    ax = fig.add_subplot(3, 3, i+1)
+    ax = fig.add_subplot(3, 3, i + 1)
     ax.imshow(samples[i, :, :, :])
     plt.xticks(np.array([]))
     plt.yticks(np.array([]))
