@@ -22,7 +22,8 @@ class MaskedConv2D(tf.keras.layers.Layer):
                  strides=1,
                  padding='same',
                  kernel_initializer='glorot_uniform',
-                 bias_initializer='zeros'):
+                 bias_initializer='zeros',
+                 input_n_channels=3):
         super(MaskedConv2D, self).__init__()
 
         assert mask_type in {'A', 'B'}
@@ -34,6 +35,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
         self.padding = padding.upper()
         self.kernel_initializer = keras.initializers.get(kernel_initializer)
         self.bias_initializer = keras.initializers.get(bias_initializer)
+        self.input_n_channels = input_n_channels
 
     def build(self, input_shape):
         self.kernel = self.add_weight("kernel",
@@ -55,25 +57,10 @@ class MaskedConv2D(tf.keras.layers.Layer):
         mask[center, center + 1:, :, :] = 0.
         mask[center + 1:, :, :, :] = 0.
 
-        # if self.mask_type == 'A':
-        #     mask[center, center, :, :int(self.filters / 3)] = 0.
-        #     mask[center, center, 1:, int(self.filters / 3):2 * int(self.filters / 3)] = 0.
-        #     mask[center, center, 2:, 2 * int(self.filters / 3):] = 0.
-        # else:
-        #     mask[center, center, int(int(input_shape[-1]) / 3):, :int(self.filters / 3)] = 0.
-        #     mask[center, center, 2 * int(int(input_shape[-1]) / 3):,
-        #     int(self.filters / 3):2 * int(self.filters / 3)] = 0.
-        #
-
-        for i in range(3):
-            for j in range(3):
+        for i in range(self.input_n_channels):
+            for j in range(self.input_n_channels):
                 if (self.mask_type == 'A' and i >= j) or (self.mask_type == 'B' and i > j):
-                    mask[
-                    center,
-                    center,
-                    i::3,
-                    j::3
-                    ] = 0.
+                    mask[center, center, i::self.input_n_channels, j::self.input_n_channels] = 0.
 
         self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
 
