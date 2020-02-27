@@ -7,13 +7,34 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow import nn
+from tensorflow.keras import initializers
 from tensorflow.keras.utils import Progbar
 
 
 class MaskedConv2D(tf.keras.layers.Layer):
-    """Convolutional layers with masks for autoregressive models
+    """Convolutional layers with masks.
 
-    Convolutional layers with simple implementation to have masks type A and B.
+    Convolutional layers with simple implementation of masks type A and B for
+    autoregressive models.
+
+    Arguments:
+    mask_type: one of `"A"` or `"B".`
+    filters: Integer, the dimensionality of the output space
+        (i.e. the number of output filters in the convolution).
+    kernel_size: An integer or tuple/list of 2 integers, specifying the
+        height and width of the 2D convolution window.
+        Can be a single integer to specify the same value for
+        all spatial dimensions.
+    strides: An integer or tuple/list of 2 integers,
+        specifying the strides of the convolution along the height and width.
+        Can be a single integer to specify the same value for
+        all spatial dimensions.
+        Specifying any stride value != 1 is incompatible with specifying
+        any `dilation_rate` value != 1.
+    padding: one of `"valid"` or `"same"` (case-insensitive).
+    kernel_initializer: Initializer for the `kernel` weights matrix.
+    bias_initializer: Initializer for the bias vector.
     """
 
     def __init__(self,
@@ -33,11 +54,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
         self.kernel_size = kernel_size
         self.strides = strides
         self.padding = padding.upper()
-        self.kernel_initializer = keras.initializers.get(kernel_initializer)
-        self.bias_initializer = keras.initializers.get(bias_initializer)
+        self.kernel_initializer = initializers.get(kernel_initializer)
+        self.bias_initializer = initializers.get(bias_initializer)
 
     def build(self, input_shape):
-        self.kernel = self.add_weight("kernel",
+        self.kernel = self.add_weight('kernel',
                                       shape=(self.kernel_size,
                                              self.kernel_size,
                                              int(input_shape[-1]),
@@ -45,7 +66,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
                                       initializer=self.kernel_initializer,
                                       trainable=True)
 
-        self.bias = self.add_weight("bias",
+        self.bias = self.add_weight('bias',
                                     shape=(self.filters,),
                                     initializer=self.bias_initializer,
                                     trainable=True)
@@ -60,8 +81,11 @@ class MaskedConv2D(tf.keras.layers.Layer):
 
     def call(self, input):
         masked_kernel = tf.math.multiply(self.mask, self.kernel)
-        x = tf.nn.conv2d(input, masked_kernel, strides=[1, self.strides, self.strides, 1], padding=self.padding)
-        x = tf.nn.bias_add(x, self.bias)
+        x = nn.conv2d(input,
+                      masked_kernel,
+                      strides=[1, self.strides, self.strides, 1],
+                      padding=self.padding)
+        x = nn.bias_add(x, self.bias)
         return x
 
 
@@ -98,7 +122,7 @@ class ResidualBlock(tf.keras.Model):
 
 
 def quantise(images, q_levels):
-    """Quantise image into q levels"""
+    """Quantise image into q levels."""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
 
 
@@ -126,7 +150,7 @@ def main():
 
     # --------------------------------------------------------------------------------------------------------------
     # Quantise the input data in q levels
-    q_levels = 4
+    q_levels = 2
     x_train_quantised = quantise(x_train, q_levels)
     x_test_quantised = quantise(x_test, q_levels)
 
@@ -156,7 +180,7 @@ def main():
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
-    x = keras.layers.Conv2D(filters=n_channel * q_levels, kernel_size=1, strides=1)(x)  # shape [N,H,W,DC]
+    x = keras.layers.Conv2D(filters=q_levels, kernel_size=1, strides=1)(x)
 
     pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
     # --------------------------------------------------------------------------------------------------------------
@@ -172,9 +196,6 @@ def main():
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x, training=True)
-
-            logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])  # shape [N,H,W,DC] -> [N,H,W,D,C]
-            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
 
             loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
 
@@ -193,18 +214,15 @@ def main():
         print('Epoch {:}/{:}'.format(epoch + 1, n_epochs))
 
         for i_iter, (batch_x, batch_y) in enumerate(train_dataset):
-            start = time.time()
             optimizer.lr = optimizer.lr * lr_decay
             loss = train_step(batch_x, batch_y)
 
-            progbar.add(1, values=[("loss", loss)])
+            progbar.add(1, values=[('loss', loss)])
     # --------------------------------------------------------------------------------------------------------------
     # Test
     test_loss = []
     for batch_x, batch_y in test_dataset:
         logits = pixelcnn(batch_x, training=False)
-        logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
-        logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
 
         # Calculate cross-entropy (= negative log-likelihood)
         loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
@@ -219,9 +237,7 @@ def main():
     for i in range(height):
         for j in range(width):
             logits = pixelcnn(samples)
-            logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
-            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-            next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+            next_sample = tf.random.categorical(logits[:, i, j, :], 1)
             samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
     fig = plt.figure(figsize=(10, 10))
@@ -251,9 +267,7 @@ def main():
     for i in range(occlude_start_row, height):
         for j in range(width):
             logits = pixelcnn(samples)
-            logits = tf.reshape(logits, [-1, height, width, q_levels, n_channel])
-            logits = tf.transpose(logits, perm=[0, 1, 2, 4, 3])
-            next_sample = tf.random.categorical(logits[:, i, j, 0, :], 1)
+            next_sample = tf.random.categorical(logits[:, i, j, :], 1)
             samples[:, i, j, 0] = (next_sample.numpy() / (q_levels - 1))[:, 0]
 
     fig = plt.figure(figsize=(10, 10))
