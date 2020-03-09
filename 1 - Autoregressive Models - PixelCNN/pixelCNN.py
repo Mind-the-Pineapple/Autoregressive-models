@@ -12,7 +12,7 @@ from tensorflow.keras import initializers
 from tensorflow.keras.utils import Progbar
 
 
-class MaskedConv2D(tf.keras.layers.Layer):
+class MaskedConv2D(keras.layers.Layer):
     """Convolutional layers with masks.
 
     Convolutional layers with simple implementation of masks type A and B for
@@ -89,7 +89,7 @@ class MaskedConv2D(tf.keras.layers.Layer):
         return x
 
 
-class ResidualBlock(tf.keras.Model):
+class ResidualBlock(keras.Model):
     """Residual blocks that compose pixelCNN
 
     Blocks of layers with 3 convolutional layers and one residual connection.
@@ -108,13 +108,13 @@ class ResidualBlock(tf.keras.Model):
         self.conv2c = keras.layers.Conv2D(filters=2 * h, kernel_size=1, strides=1)
 
     def call(self, input_tensor):
-        x = tf.nn.relu(input_tensor)
+        x = nn.relu(input_tensor)
         x = self.conv2a(x)
 
-        x = tf.nn.relu(x)
+        x = nn.relu(x)
         x = self.conv2b(x)
 
-        x = tf.nn.relu(x)
+        x = nn.relu(x)
         x = self.conv2c(x)
 
         x += input_tensor
@@ -136,7 +136,7 @@ def main():
 
     # --------------------------------------------------------------------------------------------------------------
     # Loading data
-    (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
     height = 28
     width = 28
@@ -182,14 +182,14 @@ def main():
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Conv2D(filters=q_levels, kernel_size=1, strides=1)(x)
 
-    pixelcnn = tf.keras.Model(inputs=inputs, outputs=x)
+    pixelcnn = keras.Model(inputs=inputs, outputs=x)
     # --------------------------------------------------------------------------------------------------------------
     # Prepare optimizer and loss function
     lr_decay = 0.99995
     learning_rate = 1e-2
-    optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
+    optimizer = keras.optimizers.Adam(lr=learning_rate)
 
-    compute_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+    compute_loss = keras.losses.CategoricalCrossentropy(from_logits=True)
 
     # --------------------------------------------------------------------------------------------------------------
     @tf.function
