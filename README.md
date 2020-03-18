@@ -23,7 +23,7 @@ Then, install requirements
     source venv/bin/activate
     pip3 install -r requirements.txt
 
-<h2 align="center"> 1. Autoregressive Models — PixelCNN </h2>
+<h1 align="center"> 1. Autoregressive Models — PixelCNN </h1>
 <img align="right" width="500x" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure5_Architecture_reduced.png">
 
 Creating digits with deep generative models!
