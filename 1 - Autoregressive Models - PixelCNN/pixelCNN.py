@@ -1,6 +1,5 @@
 """Script to train pixelCNN on the MNIST dataset."""
 import random as rn
-import time
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -96,8 +95,8 @@ class ResidualBlock(keras.Model):
     Based on Figure 5 from [1] where h indicates number of filters.
 
     Refs:
-    [1] - Oord, A. V. D., Kalchbrenner, N., & Kavukcuoglu, K. (2016). Pixel
-     recurrent neural networks. arXiv preprint arXiv:1601.06759.
+    [1] - Oord, A. V. D., Kalchbrenner, N., & Kavukcuoglu, K. (2016). Pixel recurrent
+    neural networks. arXiv preprint arXiv:1601.06759.
     """
 
     def __init__(self, h):
@@ -127,14 +126,14 @@ def quantise(images, q_levels):
 
 
 def main():
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Defining random seeds
     random_seed = 42
     tf.random.set_seed(random_seed)
     np.random.seed(random_seed)
     rn.seed(random_seed)
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Loading data
     (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
@@ -148,19 +147,20 @@ def main():
     x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
     x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Quantise the input data in q levels
     q_levels = 2
     x_train_quantised = quantise(x_train, q_levels)
     x_test_quantised = quantise(x_test, q_levels)
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Creating input stream using tf.data API
     batch_size = 128
     train_buf = 60000
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((x_train_quantised / (q_levels - 1),
-                                                        x_train_quantised.astype('int32')))
+    train_dataset = tf.data.Dataset.from_tensor_slices(
+        (x_train_quantised / (q_levels - 1),
+         x_train_quantised.astype('int32')))
     train_dataset = train_dataset.shuffle(buffer_size=train_buf)
     train_dataset = train_dataset.batch(batch_size)
 
@@ -168,7 +168,7 @@ def main():
                                                        x_test_quantised.astype('int32')))
     test_dataset = test_dataset.batch(batch_size)
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Create PixelCNN model
     inputs = keras.layers.Input(shape=(height, width, n_channel))
     x = MaskedConv2D(mask_type='A', filters=128, kernel_size=7, strides=1)(inputs)
@@ -183,15 +183,16 @@ def main():
     x = keras.layers.Conv2D(filters=q_levels, kernel_size=1, strides=1)(x)
 
     pixelcnn = keras.Model(inputs=inputs, outputs=x)
-    # --------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------
     # Prepare optimizer and loss function
-    lr_decay = 0.99995
-    learning_rate = 1e-2
+    lr_decay = 0.999995
+    learning_rate = 1e-3
     optimizer = keras.optimizers.Adam(lr=learning_rate)
 
     compute_loss = keras.losses.CategoricalCrossentropy(from_logits=True)
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     @tf.function
     def train_step(batch_x, batch_y):
         with tf.GradientTape() as ae_tape:
@@ -205,9 +206,9 @@ def main():
 
         return loss
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Training loop
-    n_epochs = 150
+    n_epochs = 100
     n_iter = int(np.ceil(x_train_quantised.shape[0] / batch_size))
     for epoch in range(n_epochs):
         progbar = Progbar(n_iter)
@@ -218,7 +219,7 @@ def main():
             loss = train_step(batch_x, batch_y)
 
             progbar.add(1, values=[('loss', loss)])
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Test
     test_loss = []
     for batch_x, batch_y in test_dataset:
@@ -229,9 +230,9 @@ def main():
 
         test_loss.append(loss)
     print('nll : {:} nats'.format(np.array(test_loss).mean()))
-    print('bits/dim : {:}'.format(np.array(test_loss).mean() / (height * width)))
+    print('bits/dim : {:}'.format(np.array(test_loss).mean() / np.log(2)))
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Generating new images
     samples = np.zeros((100, height, width, n_channel), dtype='float32')
     for i in range(height):
@@ -248,7 +249,7 @@ def main():
         plt.yticks(np.array([]))
     plt.show()
 
-    # --------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     # Filling occluded images
     occlude_start_row = 14
     num_generated_images = 10
