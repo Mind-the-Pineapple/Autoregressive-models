@@ -179,7 +179,6 @@ def main():
     x = keras.layers.Activation(activation='relu')(x)
     x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Activation(activation='relu')(x)
-    x = keras.layers.Conv2D(filters=128, kernel_size=1, strides=1)(x)
     x = keras.layers.Conv2D(filters=q_levels, kernel_size=1, strides=1)(x)
 
     pixelcnn = keras.Model(inputs=inputs, outputs=x)
@@ -220,7 +219,7 @@ def main():
 
             progbar.add(1, values=[('loss', loss)])
     # ------------------------------------------------------------------------------------
-    # Test
+    # Test set performance
     test_loss = []
     for batch_x, batch_y in test_dataset:
         logits = pixelcnn(batch_x, training=False)
