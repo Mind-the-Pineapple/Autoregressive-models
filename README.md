@@ -5,16 +5,13 @@
 
 [![MIT license](http://img.shields.io/badge/license-MIT-brightgreen.svg)](https://github.com/Warvito/vq-vae/blob/master/LICENSE)
 
-This repository is a supplement to our blog series *Deep Autoregressive Models*. The following major papers and corresponding blogs have been covered as part of the series and we look to add blogs on a few other significant works in the field.
+This repository is a supplement to our blog series *Deep Autoregressive Models*.
 
 ## Setup
 Clone the git repository :
 
-
     git clone https://github.com/Mind-the-Pineapple/Autoregressive-models.git
 
-
-### Installing requirements
 Python 3 with [TensorFlow 2.0+](https://www.tensorflow.org/) are the primary requirements.
 Install virtualenv and creat a new virtual environment:
 
