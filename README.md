@@ -27,7 +27,7 @@ Then, install requirements
 <img align="right" width="500x" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure5_Architecture_reduced.png">
 
 Creating digits with deep generative models!
-- [PixelCNN Medium Story]()
+- [PixelCNN Medium Story](https://towardsdatascience.com/autoregressive-models-pixelcnn-e30734ede0c1)
 - [Google Colab](https://colab.research.google.com/github/Mind-the-Pineapple/Autoregressive-models/blob/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/pixelCNN.ipynb)
 - [Code](https://github.com/Mind-the-Pineapple/Autoregressive-models/blob/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/pixelCNN.py)
 - [Paper -> Pixel Recurrent Neural Networks](https://arxiv.org/abs/1601.06759)
