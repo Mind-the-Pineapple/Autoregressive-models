@@ -1,6 +1,7 @@
 <h1 align="center"> Deep Autoregressive Models </h1>
-
-<img align="center"  height="250" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure6_reduced.png">
+<p align="center">
+<img height="250" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure6_reduced.png"> 
+</p>
 
 [![MIT license](http://img.shields.io/badge/license-MIT-brightgreen.svg)](https://github.com/Warvito/vq-vae/blob/master/LICENSE)
 
@@ -26,7 +27,7 @@ Then, install requirements
     pip3 install -r requirements.txt
 
 <h2 align="center"> 1. Autoregressive Models — PixelCNN </h2>
-<img align="right" width="500x" height="120x" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure5_Architecture_reduced.png">
+<img align="right" width="500x" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/1%20-%20Autoregressive%20Models%20-%20PixelCNN/figures/Figure5_Architecture_reduced.png">
 
 Creating digits with deep generative models!
 - [PixelCNN Medium Story]()
