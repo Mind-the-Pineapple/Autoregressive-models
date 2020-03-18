@@ -1,2 +1,3 @@
-tensorflow-gpu==2.0.0
+tensorflow
 matplotlib
+jupyter
