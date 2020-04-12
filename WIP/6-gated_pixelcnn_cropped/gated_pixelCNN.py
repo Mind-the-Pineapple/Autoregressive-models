@@ -11,8 +11,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.utils import Progbar
 from tensorflow import keras
-from tensorflow.keras import initializers
-from tensorflow import nn
+
 
 # Defining random seeds
 random_seed = 42
@@ -33,11 +32,9 @@ x_test = x_test.astype('float32') / 255.
 x_train = x_train.reshape(x_train.shape[0], height, width, n_channel)
 x_test = x_test.reshape(x_test.shape[0], height, width, n_channel)
 
-
 def quantise(images, q_levels):
     """Quantise image into q levels"""
     return (np.digitize(images, np.arange(q_levels) / q_levels) - 1).astype('float32')
-
 
 # Quantise the input data in q levels
 q_levels = 2
@@ -58,118 +55,77 @@ test_dataset = tf.data.Dataset.from_tensor_slices((x_test_quantised / (q_levels 
 test_dataset = test_dataset.batch(batch_size)
 
 
-class MaskedConv2D(keras.layers.Layer):
-    """Convolutional layers with masks for Gated PixelCNN.
-
-    Masked convolutional layers used to implement Vertical and Horizontal
-    stacks of the Gated PixelCNN.
-
-    Note: This implementation is different from the normal PixelCNN.
-
-    Arguments:
-    mask_type: one of `"V"`, `"A"` or `"B".`
-    filters: Integer, the dimensionality of the output space
-        (i.e. the number of output filters in the convolution).
-    kernel_size: An integer or tuple/list of 2 integers, specifying the
-        height and width of the 2D convolution window.
-        Can be a single integer to specify the same value for
-        all spatial dimensions.
-    strides: An integer or tuple/list of 2 integers,
-        specifying the strides of the convolution along the height and width.
-        Can be a single integer to specify the same value for
-        all spatial dimensions.
-        Specifying any stride value != 1 is incompatible with specifying
-        any `dilation_rate` value != 1.
-    padding: one of `"valid"` or `"same"` (case-insensitive).
-    kernel_initializer: Initializer for the `kernel` weights matrix.
-    bias_initializer: Initializer for the bias vector.
-    """
+class VerticalConv2D(keras.layers.Conv2D):
+    """https://github.com/JesseFarebro/PixelCNNPP/blob/master/layers/VerticalConv2D.py"""
 
     def __init__(self,
-                 mask_type,
                  filters,
                  kernel_size,
-                 strides=1,
-                 padding='same',
-                 kernel_initializer='glorot_uniform',
-                 bias_initializer='zeros'):
-        super(MaskedConv2D, self).__init__()
+                 **kwargs):
+        if not isinstance(kernel_size, tuple):
+            kernel_size = (kernel_size // 2 + 1, kernel_size)
 
-        assert mask_type in {'A', 'B', 'V'}
-        self.mask_type = mask_type
+        super(VerticalConv2D, self).__init__(filters, kernel_size, **kwargs)
 
-        self.filters = filters
+        self.pad = tf.keras.layers.ZeroPadding2D(
+            (
+                (kernel_size[0] - 1, 0),  # Top, Bottom
+                (kernel_size[1] // 2, kernel_size[1] // 2),  # Left, Right
+            )
+        )
 
-        if isinstance(kernel_size, int):
-            kernel_size = (kernel_size, kernel_size)
-        self.kernel_size = kernel_size
+    def call(self, inputs):
+        inputs = self.pad(inputs)
+        output = super(VerticalConv2D, self).call(inputs)
 
-        self.strides = strides
-        self.padding = padding.upper()
-        self.kernel_initializer = initializers.get(kernel_initializer)
-        self.bias_initializer = initializers.get(bias_initializer)
+        return output
 
-    def build(self, input_shape):
-        kernel_h, kernel_w = self.kernel_size
 
-        self.kernel = self.add_weight('kernel',
-                                      shape=(kernel_h,
-                                             kernel_w,
-                                             int(input_shape[-1]),
-                                             self.filters),
-                                      initializer=self.kernel_initializer,
-                                      trainable=True)
+class HorizontalConv2D(keras.layers.Conv2D):
+    def __init__(self,
+                 filters,
+                 kernel_size,
+                 **kwargs):
+        if not isinstance(kernel_size, tuple):
+            kernel_size = (kernel_size // 2 + 1,) * 2
 
-        self.bias = self.add_weight('bias',
-                                    shape=(self.filters,),
-                                    initializer=self.bias_initializer,
-                                    trainable=True)
+        super(HorizontalConv2D, self).__init__(filters, kernel_size, **kwargs)
+        self.pad = tf.keras.layers.ZeroPadding2D(
+            (
+                (kernel_size[0] - 1, 0),  # (Top, Bottom)
+                (kernel_size[1] - 1, 0),  # (Left, Right)
+            )
+        )
 
-        mask = np.ones(self.kernel.shape, dtype=np.float32)
+    def call(self, inputs):
+        inputs = self.pad(inputs)
+        outputs = super(HorizontalConv2D, self).call(inputs)
 
-        if kernel_h % 2 != 0:
-            center_h = kernel_h // 2
-        else:
-            center_h = (kernel_h - 1) // 2
-
-        if kernel_w % 2 != 0:
-            center_w = kernel_w // 2
-        else:
-            center_w = (kernel_w - 1) // 2
-
-        if self.mask_type == 'V':
-            mask[center_h + 1:, :, :, :] = 0.
-        else:
-            mask[:center_h, :, :] = 0.
-            mask[center_h, center_w + (self.mask_type == 'B'):, :, :] = 0.
-            mask[center_h + 1:, :, :] = 0.
-
-        self.mask = tf.constant(mask, dtype=tf.float32, name='mask')
-
-    def call(self, input):
-        masked_kernel = tf.math.multiply(self.mask, self.kernel)
-        x = nn.conv2d(input,
-                      masked_kernel,
-                      strides=[1, self.strides, self.strides, 1],
-                      padding=self.padding)
-        x = nn.bias_add(x, self.bias)
-        return x
-
+        return outputs
 
 class GatedBlock(tf.keras.Model):
     """ Gated block of the Gated PixelCNN."""
 
-    def __init__(self, mask_type, filters, kernel_size):
+    def __init__(self,
+                 mask_type,
+                 filters,
+                 kernel_size):
         super(GatedBlock, self).__init__(name='')
 
         self.mask_type = mask_type
-        self.vertical_conv = MaskedConv2D(mask_type='V',
-                                          filters=2 * filters,
-                                          kernel_size=kernel_size)
-
-        self.horizontal_conv = MaskedConv2D(mask_type=mask_type,
-                                            filters=2 * filters,
+        self.vertical_conv = VerticalConv2D(filters=2 * filters,
                                             kernel_size=kernel_size)
+
+        if mask_type == 'A':
+            self.horizontal_conv = keras.layers.Conv2D(filters=2 * filters,
+                                                       kernel_size=1)
+
+        else:
+            self.horizontal_conv = HorizontalConv2D(filters=2 * filters,
+                                                    kernel_size=kernel_size)
+
+        self.padding_A = keras.layers.ZeroPadding2D(padding=(0, (1, 0)))
+        self.cropping_A = keras.layers.Cropping2D(cropping=(0, (0, 1)))
 
         self.padding = keras.layers.ZeroPadding2D(padding=((1, 0), 0))
         self.cropping = keras.layers.Cropping2D(cropping=((0, 1), 0))
@@ -194,6 +150,9 @@ class GatedBlock(tf.keras.Model):
         v_to_h = self.v_to_h_conv(v_to_h)  # 1x1
 
         horizontal_preactivation = self.horizontal_conv(h)  # 1xN
+        if self.mask_type == 'A':
+            horizontal_preactivation = self.padding_A(horizontal_preactivation)
+            horizontal_preactivation = self.cropping_A(horizontal_preactivation)
 
         v_out = self._gate(vertical_preactivation)
 
@@ -231,7 +190,6 @@ optimizer = keras.optimizers.Adam(lr=learning_rate)
 
 compute_loss = keras.losses.CategoricalCrossentropy(from_logits=True)
 
-
 @tf.function
 def train_step(batch_x, batch_y):
     with tf.GradientTape() as ae_tape:
@@ -244,7 +202,6 @@ def train_step(batch_x, batch_y):
     optimizer.apply_gradients(zip(gradients, gated_pixelcnn.trainable_variables))
 
     return loss
-
 
 # Training loop
 n_epochs = 50
@@ -265,7 +222,7 @@ for batch_x, batch_y in test_dataset:
     logits = gated_pixelcnn(batch_x, training=False)
 
     # Calculate cross-entropy (= negative log-likelihood)
-    loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
+    loss = compute_loss(tf.squeeze(tf.one_hot(batch_y, q_levels)), logits)
 
     test_loss.append(loss)
 print('nll : {:} nats'.format(np.array(test_loss).mean()))
