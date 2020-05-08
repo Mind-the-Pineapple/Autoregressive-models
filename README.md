@@ -15,12 +15,15 @@ Clone the git repository :
 Python 3 with [TensorFlow 2.0+](https://www.tensorflow.org/) are the primary requirements.
 Install virtualenv and creat a new virtual environment:
 
-    sudo apt-get install -y python3-venv
-    python3 -m venv ./venv
+    sudo apt update
+    sudo apt install python3-dev python3-pip
+    sudo pip3 install -U virtualenv  # system-wide install
+    virtualenv --system-site-packages -p python3 ./venv
 
 Then, install requirements
 
-    source venv/bin/activate
+    source ./venv/bin/activate
+    pip3 install --upgrade pip
     pip3 install -r requirements.txt
 
 <h1 align="center"> 1. Autoregressive Models — PixelCNN </h1>

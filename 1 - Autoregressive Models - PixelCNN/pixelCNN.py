@@ -197,7 +197,7 @@ def main():
         with tf.GradientTape() as ae_tape:
             logits = pixelcnn(batch_x, training=True)
 
-            loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
+            loss = compute_loss(tf.squeeze(tf.one_hot(batch_y, q_levels)), logits)
 
         gradients = ae_tape.gradient(loss, pixelcnn.trainable_variables)
         gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
@@ -218,6 +218,7 @@ def main():
             loss = train_step(batch_x, batch_y)
 
             progbar.add(1, values=[('loss', loss)])
+
     # ------------------------------------------------------------------------------------
     # Test set performance
     test_loss = []
@@ -225,7 +226,7 @@ def main():
         logits = pixelcnn(batch_x, training=False)
 
         # Calculate cross-entropy (= negative log-likelihood)
-        loss = compute_loss(tf.one_hot(batch_y, q_levels), logits)
+        loss = compute_loss(tf.squeeze(tf.one_hot(batch_y, q_levels)), logits)
 
         test_loss.append(loss)
     print('nll : {:} nats'.format(np.array(test_loss).mean()))

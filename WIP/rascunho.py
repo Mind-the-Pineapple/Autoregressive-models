@@ -3,7 +3,7 @@ grad = x.grad.detach().cpu().numpy()[0, 0]
 grad = np.abs(grad)
 grad = (grad != 0).astype('float64')
 grad[5, 5, 5] = 0.5
-
+from  matplotlib.ticker import FixedLocator
 plt.figure()
 for i in range(10):
     axes = plt.subplot(2,5,i+1)
