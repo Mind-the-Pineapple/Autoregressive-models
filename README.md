@@ -13,7 +13,7 @@ Clone the git repository :
     git clone https://github.com/Mind-the-Pineapple/Autoregressive-models.git
 
 Python 3 with [TensorFlow 2.0+](https://www.tensorflow.org/) are the primary requirements.
-Install virtualenv and creat a new virtual environment:
+Install virtualenv and create a new virtual environment:
 
     sudo apt update
     sudo apt install python3-dev python3-pip
