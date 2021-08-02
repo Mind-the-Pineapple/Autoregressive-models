@@ -40,7 +40,7 @@ Creating digits with deep generative models!
 <img align="right" width="500x" src="https://raw.githubusercontent.com/Mind-the-Pineapple/Autoregressive-models/master/2%20-%20Modelling%20data%20with%20multiple%20channels/figures/PixelcnnRGB.png">
 
 Extending the model to the full colour spectrum
-- [PixelCNN - RGB Medium Story](https://towardsdatascience.com/autoregressive-models-pixelcnn-e30734ede0c1)
+- [PixelCNN - RGB Medium Story](https://blog.usejournal.com/modelling-coloured-images-acd0ebde0102)
 - [Google Colab](https://colab.research.google.com/gist/PedroFerreiradaCosta/a770317efa23f36b3c5009a9f21169f3/pixelcnn-rgb.ipynb?authuser=1#scrollTo=deJgSHmOBGfk)
 - [Code](https://github.com/Mind-the-Pineapple/Autoregressive-models/blob/master/2%20-%20Modelling%20data%20with%20multiple%20channels/pixelCNN_RGB.py)
 - [Paper -> Pixel Recurrent Neural Networks](https://arxiv.org/abs/1601.06759)
